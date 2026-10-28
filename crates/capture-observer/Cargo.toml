@@ -1,0 +1,13 @@
+[package]
+name = "capture-observer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Read-only decoded ROS observation association and quality-query JSONL bridge"
+
+[dependencies]
+capture-contract = { path = "../capture-contract" }
+quality-core = { path = "../quality-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }

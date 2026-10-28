@@ -256,5 +256,81 @@ pub fn service_config(d: &Value, c: &Value, generation: &str, runtime: &Value) -
     service["status_path"] = "/tmp/capture/status.json".into();
     service["generation"] = generation.into();
     let m = &runtime["manifest"];
-    json!({"version":1,"sdk_library":SDK_PATH,"serial":c["serial_number"],"color":stream("color"),"depth":depth,"pairing":policy["pairing"],"poll_ms":policy["poll_ms"],"capacity":policy["capacity"],"startup_discovery_seconds":policy["startup_discovery_seconds"],"ros":{"bridge":BRIDGE_PATH,"namespace":c["namespace"],"stamp_source":"sdk-system-unix"},"service":service,"runtime_contract":{"sdk_sha256":m["sdk_sha256"],"bridge_sha256":m["bridge_sha256"],"service_sha256":m["service_sha256"]}})
+    let mut value = json!({"version":1,"sdk_library":SDK_PATH,"serial":c["serial_number"],"color":stream("color"),"depth":depth,"pairing":policy["pairing"],"poll_ms":policy["poll_ms"],"capacity":policy["capacity"],"startup_discovery_seconds":policy["startup_discovery_seconds"],"ros":{"bridge":BRIDGE_PATH,"namespace":c["namespace"],"stamp_source":"sdk-system-unix"},"service":service,"runtime_contract":{"sdk_sha256":m["sdk_sha256"],"bridge_sha256":m["bridge_sha256"],"service_sha256":m["service_sha256"]}});
+    value["quality_policy"] = json!({
+        "version":1,
+        "max_source_age_ns":service["idle_timeout_ms"].as_u64().unwrap_or(0).saturating_mul(1_000_000),
+        "max_future_ns":100_000_000,
+        "max_pair_delta_us":policy["pairing"]["max_delta_us"],
+        "min_valid_fraction":0.0,
+        "max_zero_fraction":1.0,
+        "action":"report-only"
+    });
+    let mut rules = serde_json::Map::new();
+    for code in [
+        "STREAM_STALE",
+        "TIMESTAMP_REGRESSION",
+        "PAIR_SKEW_EXCEEDED",
+        "FRAME_CONTRACT_INVALID",
+        "QUEUE_OVERFLOW",
+        "DEVICE_DISCONNECTED",
+        "SESSION_CHANGED",
+        "PUBLISH_PARTIAL_FAILURE",
+        "TIME_MAPPING_INVALID",
+    ] {
+        rules.insert(
+            code.into(),
+            json!({"open_after":1,"recover_after":3,"severity":"degraded"}),
+        );
+    }
+    value["quality_runtime"] = json!({"version":1,"quality":value["quality_policy"],"stale_after_ns":value["quality_policy"]["max_source_age_ns"],"event_capacity":256,"window_capacity":1024,"window_horizon_ns":10_000_000_000_u64,"summary_capacity":1,"max_sessions":1,"rules":rules});
+    value["service"]["recording_control_path"] = "/recording/control.json".into();
+    value
+}
+#[cfg(test)]
+mod quality_generation_tests {
+    use super::*;
+    #[test]
+    fn generated_quality_runtime_keeps_explicit_existing_idle_and_pair_budgets() {
+        let d = json!({"rust_capture":{"depth_unit_policy":"normalize-mm","pairing":{"clock":"device","max_delta_us":20000},"poll_ms":100,"capacity":4,"startup_discovery_seconds":0,"service":{"idle_timeout_ms":3456,"startup_timeout_ms":15000,"heartbeat_ms":500,"heartbeat_timeout_ms":10000,"max_restarts":2,"restart_backoff_ms":1000,"shutdown_timeout_ms":1000,"ready_min_pairs":5}}});
+        let camera = json!({"parameters":{"color_width":640,"color_height":480,"color_fps":30,"depth_width":640,"depth_height":480,"depth_fps":30},"serial_number":"synthetic-private","namespace":"/test","frame_prefix":"test"});
+        let config = service_config(
+            &d,
+            &camera,
+            &"a".repeat(32),
+            &json!({"manifest":{"sdk_sha256":"a".repeat(64),"bridge_sha256":"b".repeat(64),"service_sha256":"c".repeat(64)}}),
+        );
+        assert_eq!(
+            config["quality_policy"]["max_source_age_ns"],
+            3_456_000_000_u64
+        );
+        assert_eq!(
+            config["quality_runtime"]["stale_after_ns"],
+            3_456_000_000_u64
+        );
+        assert_eq!(config["quality_policy"]["max_pair_delta_us"], 20000);
+        assert_eq!(
+            config["quality_runtime"]["quality"],
+            config["quality_policy"]
+        );
+        assert_eq!(config["quality_policy"]["action"], "report-only");
+        assert_eq!(config["quality_policy"]["min_valid_fraction"], 0.0);
+        assert_eq!(config["quality_policy"]["max_zero_fraction"], 1.0);
+        assert_eq!(
+            config["quality_runtime"]["rules"]
+                .as_object()
+                .unwrap()
+                .len(),
+            9
+        );
+        for rule in config["quality_runtime"]["rules"]
+            .as_object()
+            .unwrap()
+            .values()
+        {
+            assert_eq!(rule["open_after"], 1);
+            assert_eq!(rule["recover_after"], 3);
+        }
+        assert_eq!(config["service"]["max_restarts"], 2);
+    }
 }

@@ -82,3 +82,11 @@ extern "C" int32_t gdp_ros_aux_set_session_id(void *handle,const char *id){
  if(p.published||!p.session_id.empty())return 1;
  p.session_id=id;event("aux-session-bound");return 0;
 }
+
+extern "C" int32_t gdp_ros_aux_publish_evidence(void *handle,const char *json,size_t length){
+  if(!handle||!json||length==0||length>65536)return 1;
+  auto &p=*static_cast<AuxMock *>(handle);if(!p.published)return 1;
+  std::string owned(json,length);if(owned.find("consumer_receipt_verified") == std::string::npos)return 1;
+  if(p.last.pair_sequence==2){event("evidence-failed");return 2;}
+  event("evidence-copied");return 0;
+}

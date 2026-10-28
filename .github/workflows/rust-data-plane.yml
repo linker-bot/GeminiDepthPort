@@ -12,11 +12,13 @@ jobs:
       - name: Install declared minimum Rust toolchain
         run: rustup toolchain install 1.85.0 --profile minimal --component rustfmt,clippy
       - name: Check data-plane formatting
-        run: cargo +1.85.0 fmt -p frame-core -p orbbec-sys -p orbbec-safe -p capture-probe -p ros-output --check
+        run: cargo +1.85.0 fmt -p capture-contract -p quality-core -p capture-observer -p frame-core -p orbbec-sys -p orbbec-safe -p capture-probe -p ros-output --check
       - name: Offline hardware-independent tests
-        run: cargo +1.85.0 test --locked -p frame-core -p orbbec-sys -p orbbec-safe -p capture-probe -p ros-output
+        run: cargo +1.85.0 test --locked -p capture-contract -p quality-core -p capture-observer -p frame-core -p orbbec-sys -p orbbec-safe -p capture-probe -p ros-output
+      - name: Test read-only ROS observer decoding without ROS
+        run: python3 -m unittest discover -s tools/observation -p 'test_*.py'
       - name: Lint data plane
-        run: cargo +1.85.0 clippy --locked -p frame-core -p orbbec-sys -p orbbec-safe -p capture-probe -p ros-output --all-targets -- -D warnings
+        run: cargo +1.85.0 clippy --locked -p capture-contract -p quality-core -p capture-observer -p frame-core -p orbbec-sys -p orbbec-safe -p capture-probe -p ros-output --all-targets -- -D warnings
 
   ros-humble-bridge:
     runs-on: ubuntu-24.04

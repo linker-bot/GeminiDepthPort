@@ -116,6 +116,7 @@ pub struct RosAuxPublisher {
     destroy: Destroy,
     last: Option<(PairEvidence, u64, u64)>,
     session_bound: bool,
+    session_id: Option<String>,
 }
 unsafe fn symbol<T: Copy>(library: &Library, name: &'static [u8]) -> Result<T> {
     let raw = unsafe { libc::dlsym(library.handle.as_ptr(), name.as_ptr().cast()) };
@@ -210,6 +211,7 @@ impl RosAuxPublisher {
             destroy,
             last: None,
             session_bound: false,
+            session_id: None,
         })
     }
     /// Bind once before the first pair; session changes require a new publisher.
@@ -227,6 +229,76 @@ impl RosAuxPublisher {
             )?;
         }
         self.session_bound = true;
+        self.session_id = Some(value.into());
+        Ok(())
+    }
+    /// Separate additive topic `<pair_metadata_topic>/evidence`; legacy v1 is unchanged.
+    /// Call only after both Image submissions and the matching legacy pair submission.
+    pub fn publish_bound_evidence(
+        &mut self,
+        evidence: &frame_core::BoundPairEvidence,
+        color_ns: u64,
+        depth_ns: u64,
+    ) -> Result<()> {
+        evidence.validate()?;
+        let (pair, cs, ds) = self.last.context("legacy pair submission required")?;
+        ensure!(
+            pair.pair_sequence == evidence.pair_sequence
+                && cs == color_ns
+                && ds == depth_ns
+                && pair.color_sequence
+                    == evidence
+                        .color
+                        .context
+                        .sequence
+                        .context("color sequence required")?
+                && pair.depth_sequence
+                    == evidence
+                        .depth
+                        .context
+                        .sequence
+                        .context("depth sequence required")?,
+            "pair evidence differs from submitted images"
+        );
+        ensure!(
+            evidence
+                .color
+                .context
+                .system_timestamp_us
+                .and_then(|s| s.checked_mul(1000))
+                == Some(color_ns)
+                && evidence
+                    .depth
+                    .context
+                    .system_timestamp_us
+                    .and_then(|s| s.checked_mul(1000))
+                    == Some(depth_ns),
+            "ROS source mapping differs"
+        );
+        ensure!(
+            self.session_id.as_deref() == Some(evidence.color.context.session_id.as_str()),
+            "pair session differs from publisher session"
+        );
+        ensure!(
+            pair.color_timestamp_us == evidence.color_stamp_us
+                && pair.depth_timestamp_us == evidence.depth_stamp_us
+                && pair.delta_us == evidence.delta_us
+                && evidence.clock_source
+                    == match pair.clock {
+                        PairClock::Device => "device_us",
+                        PairClock::System => "sdk_system_us",
+                    },
+            "pair evidence clock differs from submitted pair"
+        );
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"version":1,"pair":evidence,"color_stamp_ns":color_ns,"depth_stamp_ns":depth_ns,"image_submission":"submitted","consumer_receipt_verified":false}),
+        )?;
+        ensure!(bytes.len() <= 65536, "evidence size limit");
+        type PublishEvidence = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32;
+        let publish: PublishEvidence =
+            unsafe { symbol(&self.library, b"gdp_ros_aux_publish_evidence\0")? };
+        let code = unsafe { publish(self.handle.as_ptr(), bytes.as_ptr(), bytes.len()) };
+        ensure!(code == 0, "pair evidence submission failed (code {code})");
         Ok(())
     }
     pub fn publish_pair(

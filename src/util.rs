@@ -31,7 +31,13 @@ pub fn hash(data: impl AsRef<[u8]>) -> String {
     digest::digest(&digest::SHA256, data.as_ref())
         .as_ref()
         .iter()
-        .map(|b| format!("{b:02x}"))
+        .flat_map(|b| {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            [
+                HEX[(b >> 4) as usize] as char,
+                HEX[(b & 15) as usize] as char,
+            ]
+        })
         .collect()
 }
 pub fn file_hash(path: &Path) -> Result<String> {
@@ -42,7 +48,15 @@ pub fn random(bytes: usize) -> String {
     SystemRandom::new()
         .fill(&mut b)
         .expect("OS entropy unavailable");
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    b.iter()
+        .flat_map(|b| {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            [
+                HEX[(b >> 4) as usize] as char,
+                HEX[(b & 15) as usize] as char,
+            ]
+        })
+        .collect()
 }
 pub fn now() -> f64 {
     SystemTime::now()

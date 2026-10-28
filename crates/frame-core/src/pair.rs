@@ -16,6 +16,18 @@ pub struct PairPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthUnitPolicy {
+    RequireMillimetres,
+    PreserveSdkCounts,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairAcceptance {
+    pub pairing: PairPolicy,
+    pub provenance: PairProvenance,
+    pub depth_unit: DepthUnitPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PairProvenance {
     /// Caller obtained both child frames from the same SDK frameset object.
     /// This is a caller assertion, not hardware exposure synchronization proof.
@@ -106,6 +118,7 @@ fn selected_stamp(metadata: &PacketMetadata, clock: PairClock) -> Result<u64, Pa
 #[derive(Debug, Default)]
 pub struct PairGuard {
     last: Option<PairEvidence>,
+    depth_unit: Option<DepthUnitPolicy>,
 }
 impl PairGuard {
     pub fn last(&self) -> Option<PairEvidence> {
@@ -123,6 +136,35 @@ impl PairGuard {
         policy: PairPolicy,
         provenance: PairProvenance,
     ) -> Result<RgbdPair<T, U>, PairError> {
+        self.accept_with_policy(
+            pair_sequence,
+            color,
+            depth,
+            payload_lengths,
+            PairAcceptance {
+                pairing: policy,
+                provenance,
+                depth_unit: DepthUnitPolicy::RequireMillimetres,
+            },
+        )
+    }
+    /// Native-count callers must preserve both pixels and original SDK scale.
+    pub fn accept_with_policy<T, U>(
+        &mut self,
+        pair_sequence: u64,
+        color: Option<FramePacket<T>>,
+        depth: Option<FramePacket<U>>,
+        payload_lengths: (usize, usize),
+        acceptance: PairAcceptance,
+    ) -> Result<RgbdPair<T, U>, PairError> {
+        let policy = acceptance.pairing;
+        let provenance = acceptance.provenance;
+        if self
+            .depth_unit
+            .is_some_and(|unit| unit != acceptance.depth_unit)
+        {
+            return Err(PairError::InvalidPolicy);
+        }
         if policy.max_delta_us == 0 {
             return Err(PairError::InvalidPolicy);
         }
@@ -144,7 +186,15 @@ impl PairGuard {
         {
             return Err(PairError::StreamEncoding);
         }
-        if depth.metadata.output_depth_scale_mm != Some(1.0) {
+        if match acceptance.depth_unit {
+            DepthUnitPolicy::RequireMillimetres => {
+                depth.metadata.output_depth_scale_mm != Some(1.0)
+            }
+            DepthUnitPolicy::PreserveSdkCounts => {
+                depth.metadata.normalized
+                    || depth.metadata.source_depth_scale_mm != depth.metadata.output_depth_scale_mm
+            }
+        } {
             return Err(PairError::DepthNotMillimetres);
         }
         let color_timestamp_us = selected_stamp(&color.metadata, policy.clock)?;
@@ -187,6 +237,7 @@ impl PairGuard {
             hardware_sync_verified: false,
         };
         self.last = Some(evidence);
+        self.depth_unit = Some(acceptance.depth_unit);
         Ok(RgbdPair {
             color,
             depth,

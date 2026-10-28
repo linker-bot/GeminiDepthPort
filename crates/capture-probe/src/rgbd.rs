@@ -23,6 +23,8 @@ pub(crate) struct RosConfig {
 pub(crate) struct Config {
     pub(crate) sdk_library: String,
     pub(crate) serial: String,
+    pub(crate) quality_policy: Option<capture_contract::QualityPolicy>,
+    pub(crate) configuration: Value,
     pub(crate) color: StreamConfig,
     pub(crate) depth: StreamConfig,
     pub(crate) normalize: bool,
@@ -91,7 +93,7 @@ fn stream(value: &Value, depth: bool) -> Result<StreamConfig> {
 impl Config {
     pub(crate) fn parse(raw: &str) -> Result<Self> {
         ensure!(raw.len() <= 64 * 1024, "config size limit");
-        let value: Value = serde_json::from_str(raw)?;
+        let value: Value = capture_contract::parse_strict(raw.as_bytes())?;
         fields(
             &value,
             &[
@@ -105,7 +107,7 @@ impl Config {
                 "poll_ms",
                 "capacity",
             ],
-            &["ros", "startup_discovery_seconds"],
+            &["ros", "startup_discovery_seconds", "quality_policy"],
         )?;
         ensure!(value["version"].as_u64() == Some(1), "config version");
         let sdk_library = text(&value, "sdk_library")?;
@@ -167,7 +169,20 @@ impl Config {
         } else {
             None
         };
+        let quality_policy = value
+            .get("quality_policy")
+            .map(|v| serde_json::from_value::<capture_contract::QualityPolicy>(v.clone()))
+            .transpose()?;
+        if let Some(policy) = &quality_policy {
+            policy.validate()?;
+            ensure!(
+                policy.max_pair_delta_us == max_delta_us,
+                "quality and pairing skew policies differ"
+            );
+        }
         Ok(Self {
+            quality_policy,
+            configuration: value.clone(),
             sdk_library,
             serial,
             color,
@@ -200,6 +215,7 @@ impl Storage {
 pub(crate) struct QueuedPair {
     pub(crate) pair: RgbdPair<Storage, Storage>,
     pub(crate) enqueued_at: Instant,
+    pub(crate) bound_evidence: Option<frame_core::BoundPairEvidence>,
 }
 #[derive(Default)]
 pub(crate) struct Metrics {
@@ -451,6 +467,11 @@ pub(crate) fn drain(
                 metrics.publish_calls += 1;
                 ros.aux.publish_pair(&pair.evidence, color_ns, depth_ns)?;
                 metrics.publish_calls += 1;
+                if let Some(evidence) = &item.bound_evidence {
+                    ros.aux
+                        .publish_bound_evidence(evidence, color_ns, depth_ns)?;
+                    metrics.publish_calls += 1;
+                }
                 Ok(())
             })();
             metrics.publish_ns += start.elapsed().as_nanos();
@@ -611,6 +632,7 @@ fn run(config: Config) -> Result<Value> {
                 continue;
             }
             queue.push(QueuedPair {
+                bound_evidence: None,
                 pair,
                 enqueued_at: Instant::now(),
             });
@@ -741,6 +763,7 @@ mod tests {
                 )
                 .unwrap();
             let evicted = queue.push(QueuedPair {
+                bound_evidence: None,
                 pair,
                 enqueued_at: Instant::now(),
             });

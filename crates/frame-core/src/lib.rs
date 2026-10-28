@@ -284,3 +284,8 @@ mod tests {
         assert_eq!(released.get(), 2);
     }
 }
+
+pub mod bound_pair;
+pub use bound_pair::{BoundPair, BoundPairError, BoundPairEvidence, BoundPairGuard, FrameEvidence};
+
+pub use pair::{DepthUnitPolicy, PairAcceptance};

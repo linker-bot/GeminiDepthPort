@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/frame-core", "crates/orbbec-sys", "crates/orbbec-safe", "crates/capture-probe", "crates/ros-output"]
+members = ["crates/capture-contract", "crates/quality-core", "crates/capture-observer", "crates/frame-core", "crates/orbbec-sys", "crates/orbbec-safe", "crates/capture-probe", "crates/ros-output"]
 resolver = "3"
 
 [package]
@@ -11,6 +11,7 @@ license = "Apache-2.0"
 description = "GeminiDepthPort host management service and CLI"
 
 [dependencies]
+capture-contract = { path = "crates/capture-contract" }
 anyhow = "1.0"
 libc = "0.2"
 regex = "1.12"

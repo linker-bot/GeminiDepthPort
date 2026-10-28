@@ -1,0 +1,74 @@
+use capture_contract::{MonoTime, SessionId};
+use std::collections::VecDeque;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WindowEvictions {
+    pub expired: u64,
+    pub capacity: u64,
+}
+
+/// A single explicitly declared monotonic domain. Capacity and age both bound
+/// retained data. Source/Unix clocks never participate in expiry.
+#[derive(Debug)]
+pub struct RollingWindow<T> {
+    session: SessionId,
+    capacity: usize,
+    horizon_ns: u64,
+    last_ns: u64,
+    entries: VecDeque<(u64, T)>,
+}
+impl<T> RollingWindow<T> {
+    pub fn new(session: SessionId, capacity: usize, horizon_ns: u64) -> Result<Self, &'static str> {
+        if !(1..=100_000).contains(&capacity) || horizon_ns == 0 {
+            return Err("WINDOW_POLICY_INVALID");
+        }
+        Ok(Self {
+            session,
+            capacity,
+            horizon_ns,
+            last_ns: 0,
+            entries: VecDeque::new(),
+        })
+    }
+    fn validate_time(&self, at: &MonoTime) -> Result<(), &'static str> {
+        if at.session_id != self.session {
+            return Err("MONOTONIC_DOMAIN_MISMATCH");
+        }
+        if at.offset_ns < self.last_ns {
+            return Err("MONOTONIC_REGRESSION");
+        }
+        Ok(())
+    }
+    pub fn tick(&mut self, at: &MonoTime) -> Result<WindowEvictions, &'static str> {
+        self.validate_time(at)?;
+        self.last_ns = at.offset_ns;
+        let mut result = WindowEvictions::default();
+        while self
+            .entries
+            .front()
+            .is_some_and(|(t, _)| at.offset_ns - t > self.horizon_ns)
+        {
+            self.entries.pop_front();
+            result.expired += 1;
+        }
+        Ok(result)
+    }
+    pub fn push(&mut self, at: &MonoTime, value: T) -> Result<WindowEvictions, &'static str> {
+        let mut result = self.tick(at)?;
+        if self.entries.len() == self.capacity {
+            self.entries.pop_front();
+            result.capacity += 1;
+        }
+        self.entries.push_back((at.offset_ns, value));
+        Ok(result)
+    }
+    pub fn iter(&self) -> impl Iterator<Item = &(u64, T)> {
+        self.entries.iter()
+    }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}

@@ -172,3 +172,64 @@ fn concurrent_fixture_creation_never_reuses_clock_resolution_path() {
         fs::remove_dir_all(dir).unwrap();
     }
 }
+#[test]
+fn real_failed_service_persists_private_final_quality_without_device_identity() {
+    let (dir, mut value) = fixture();
+    let quality = json!({"version":1,"max_source_age_ns":2_000_000_000_u64,"max_future_ns":100_000_000,"max_pair_delta_us":20_000,"min_valid_fraction":0.0,"max_zero_fraction":1.0,"action":"report-only"});
+    let mut rules = serde_json::Map::new();
+    for code in [
+        "STREAM_STALE",
+        "TIMESTAMP_REGRESSION",
+        "PAIR_SKEW_EXCEEDED",
+        "FRAME_CONTRACT_INVALID",
+        "QUEUE_OVERFLOW",
+        "DEVICE_DISCONNECTED",
+        "SESSION_CHANGED",
+        "PUBLISH_PARTIAL_FAILURE",
+        "TIME_MAPPING_INVALID",
+    ] {
+        rules.insert(
+            code.into(),
+            json!({"open_after":1,"recover_after":2,"severity":"degraded"}),
+        );
+    }
+    value["quality_policy"] = quality.clone();
+    value["quality_runtime"] = json!({"version":1,"quality":quality,"stale_after_ns":2_000_000_000_u64,"event_capacity":8,"window_capacity":8,"window_horizon_ns":10_000_000_000_u64,"summary_capacity":1,"max_sessions":1,"rules":rules});
+    let path = dir.join("config.json");
+    fs::write(&path, value.to_string()).unwrap();
+    let mut child = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_capture-service"))
+            .arg("--config")
+            .arg(path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let started = Instant::now();
+    let exit = loop {
+        if let Some(exit) = child.try_wait().unwrap() {
+            break exit;
+        }
+        assert!(started.elapsed() < Duration::from_secs(5));
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(!exit.success());
+    let status: Value =
+        serde_json::from_slice(&fs::read(dir.join("status.json")).unwrap()).unwrap();
+    let quality = &status["quality"];
+    assert_eq!(quality["state"], "degraded");
+    for field in ["current_path", "events_path", "summary_path"] {
+        let path = quality[field].as_str().unwrap();
+        assert!(std::path::Path::new(path).starts_with(&dir));
+        let bytes = fs::read(path).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-device"));
+        let parsed: Value = serde_json::from_slice(&bytes).unwrap();
+        if field == "current_path" {
+            assert_eq!(parsed["quality"]["current_session_finalized"], true);
+            assert_eq!(parsed["received_counts"]["color"], 0);
+            assert_eq!(parsed["received_counts"]["depth"], 0);
+        }
+    }
+    fs::remove_dir_all(dir).unwrap();
+}

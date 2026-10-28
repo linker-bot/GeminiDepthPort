@@ -627,6 +627,9 @@ impl Controller {
     pub fn protect(&self) -> Result<Value> {
         let d = self.load()?;
         let s = self.check_render(&d)?;
+        if capture_backend::selected(&d) == "rust" {
+            return crate::recording::protect(self, &d, &s);
+        }
         require(
             self.existing(&s)?.len() == s["cameras"].as_array().unwrap().len(),
             "GROUP_INCOMPLETE",
@@ -648,6 +651,11 @@ impl Controller {
     }
     pub fn release(&self, token: &str) -> Result<()> {
         let path = self.root.join("state/recording-guard.json");
+        if let Ok(record) = read_json(&path) {
+            if record["version"] == 2 {
+                return crate::recording::release(self, token, record);
+            }
+        }
         let valid = read_json(&path)
             .ok()
             .and_then(|v| {

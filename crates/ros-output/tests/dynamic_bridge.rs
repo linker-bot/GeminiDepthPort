@@ -101,6 +101,8 @@ fn dynamic_abi_copy_guards_and_cleanup() {
     assert_eq!(log.lines().filter(|l| *l == "aux-create").count(), 2);
     assert_eq!(log.lines().filter(|l| *l == "aux-destroy").count(), 2);
     assert_eq!(log.lines().filter(|l| *l == "aux-publish").count(), 2);
+    assert_eq!(log.lines().filter(|l| *l == "evidence-copied").count(), 1);
+    assert_eq!(log.lines().filter(|l| *l == "evidence-failed").count(), 1);
     assert_eq!(
         log.lines().filter(|l| *l == "aux-publish-failed").count(),
         1
@@ -223,6 +225,42 @@ fn mock_child() {
             .publish_pair(&evidence, stamp, stamp + 1000)
             .is_err()
     );
+    let frame = |depth: bool| {
+        frame_core::FrameEvidence {context:serde_json::from_value(serde_json::json!({"version":1,"session_id":"0123456789abcdef0123456789abcdef","generation_id":"a".repeat(32),"configuration_id":"b".repeat(64),"calibration_id":"c".repeat(64),"snapshot_id":"d".repeat(64),"stream_id":if depth {"depth"}else{"color"},"sequence":if depth{20}else{10},"device_timestamp_us":if depth{11}else{1},"system_timestamp_us":(stamp+if depth{1000}else{0})/1000,"received_mono_offset_ns":5})).unwrap(),encoding:if depth{"depth16"}else{"yuyv"}.into(),width:2,height:2,stride:4,source_depth_scale_mm:depth.then_some(1.),output_depth_scale_mm:depth.then_some(1.),normalized:false}
+    };
+    let mut bound = frame_core::BoundPairEvidence {
+        version: 1,
+        pair_sequence: 1,
+        color: frame(false),
+        depth: frame(true),
+        color_stamp_us: 1,
+        depth_stamp_us: 11,
+        clock_source: "device_us".into(),
+        delta_us: 10,
+        association: "sdk_frameset".into(),
+        hardware_sync_verified: false,
+    };
+    auxiliary
+        .publish_bound_evidence(&bound, stamp, stamp + 1000)
+        .unwrap();
+    bound.color_stamp_us = 2;
+    bound.color.context.device_timestamp_us = Some(2);
+    bound.delta_us = 9;
+    assert!(
+        auxiliary
+            .publish_bound_evidence(&bound, stamp, stamp + 1000)
+            .is_err()
+    );
+    bound.color_stamp_us = 1;
+    bound.color.context.device_timestamp_us = Some(1);
+    bound.delta_us = 10;
+    bound.color.context.session_id =
+        serde_json::from_value(serde_json::json!("e".repeat(32))).unwrap();
+    assert!(
+        auxiliary
+            .publish_bound_evidence(&bound, stamp, stamp + 1000)
+            .is_err()
+    );
     evidence.pair_sequence = 999;
     evidence.color_sequence += 1;
     evidence.depth_sequence += 1;
@@ -237,6 +275,22 @@ fn mock_child() {
     auxiliary
         .publish_pair(&evidence, stamp + 2000, stamp + 3000)
         .unwrap();
+    bound.pair_sequence = 2;
+    bound.color = frame(false);
+    bound.depth = frame(true);
+    bound.color.context.sequence = Some(11);
+    bound.depth.context.sequence = Some(21);
+    bound.color_stamp_us = 101;
+    bound.depth_stamp_us = 111;
+    bound.color.context.device_timestamp_us = Some(101);
+    bound.depth.context.device_timestamp_us = Some(111);
+    bound.color.context.system_timestamp_us = Some(stamp / 1000 + 2);
+    bound.depth.context.system_timestamp_us = Some(stamp / 1000 + 3);
+    assert!(
+        auxiliary
+            .publish_bound_evidence(&bound, stamp + 2000, stamp + 3000)
+            .is_err()
+    );
     evidence.pair_sequence = 3;
     evidence.color_sequence += 1;
     evidence.depth_sequence += 1;

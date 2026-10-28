@@ -216,6 +216,22 @@ else:sys.exit(2)
     let config = read_json(&config_path).unwrap();
     assert_eq!(config["service"]["generation"], record["generation"]);
     assert_eq!(
+        config["service"]["recording_control_path"],
+        "/recording/control.json"
+    );
+    assert!(service["volumes"].as_array().unwrap().iter().any(|m| {
+        m["target"] == "/recording"
+            && m["read_only"] == false
+            && m["source"].as_str()
+                == Some(
+                    root.canonicalize()
+                        .unwrap()
+                        .join("state/recording-gates/camera_a")
+                        .to_str()
+                        .unwrap(),
+                )
+    }));
+    assert_eq!(
         fs::metadata(&config_path).unwrap().permissions().mode() & 0o777,
         0o600
     );

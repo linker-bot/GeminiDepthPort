@@ -41,7 +41,7 @@ fn run() -> Result<()> {
         || a.iter().any(|v| ["--help", "-h"].contains(&v.as_str()))
     {
         println!(
-            "geminidepthport [--root DIRECTORY] COMMAND\nCommands: serve, scan, validate [--file FILE] [--draft], migrate [--bindings FILE] [--apply --expected-plan HASH], render [--draft], preflight, build, up, boot, status, check, down, stack-stop [--remove], devices, image-ref, bind NAME SERIAL, set NAME KEY JSON, confirm-profile NAME, protect, release-protection, logs, calibration-export, http-health"
+            "geminidepthport [--root DIRECTORY] COMMAND\nCommands: serve, scan, validate [--file FILE] [--draft], migrate [--bindings FILE] [--apply --expected-plan HASH], render [--draft], preflight, build, up, boot, status, check, down, stack-stop [--remove], devices, image-ref, bind NAME SERIAL, set NAME KEY JSON, confirm-profile NAME, protect, release-protection, logs, calibration-export, capture-snapshot, recording-status, http-health"
         );
         return Ok(());
     }
@@ -82,6 +82,8 @@ fn run() -> Result<()> {
         "preflight",
         "calibration-export",
         "release-protection",
+        "recording-status",
+        "capture-snapshot",
     ];
     let _lock = if (cmd == "migrate" && !flag(&a, "--apply"))
         || ["scan", "validate", "image-ref", "status", "logs"].contains(&cmd)
@@ -118,6 +120,10 @@ fn run() -> Result<()> {
         let mut token = String::new();
         std::io::stdin().take(4096).read_to_string(&mut token)?;
         ctl.release(token.trim())?;
+        return Ok(());
+    }
+    if cmd == "recording-status" {
+        println!("{}", geminidepthport::recording::status(&ctl));
         return Ok(());
     }
     // Shutdown uses discovered ownership labels even if inventory is missing or malformed.
@@ -205,6 +211,11 @@ fn run() -> Result<()> {
             outcome?
         }
         "protect" => ctl.protect()?,
+        "capture-snapshot" => {
+            let generation = ctl.check_render(&d)?;
+            let snapshots = geminidepthport::capture_snapshot::acquire(&ctl, &d, &generation)?;
+            geminidepthport::capture_snapshot::machine_summary(&snapshots)
+        }
         "calibration-export" => calibration::export(&ctl).map_err(|_| {
             anyhow::anyhow!("CALIBRATION_EXPORT_FAILED: Inspect controlled calibration status")
         })?,
@@ -290,7 +301,7 @@ fn validate_arguments(a: &[String]) -> Result<()> {
         "confirm-profile" => (&[], &[], 1),
         "scan" | "preflight" | "build" | "up" | "boot" | "status" | "check" | "down"
         | "devices" | "image-ref" | "protect" | "release-protection" | "logs"
-        | "calibration-export" => (&[], &[], 0),
+        | "calibration-export" | "recording-status" | "capture-snapshot" => (&[], &[], 0),
         _ => anyhow::bail!("ARGUMENT: Unknown command"),
     };
     if positional > 0 {

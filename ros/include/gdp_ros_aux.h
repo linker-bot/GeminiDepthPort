@@ -2,6 +2,7 @@
 #ifndef GDP_ROS_AUX_H
 #define GDP_ROS_AUX_H
 #include <stdint.h>
+#include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -23,6 +24,8 @@ uint32_t gdp_ros_aux_abi_version(void);
 int32_t gdp_ros_aux_create(const gdp_ros_aux_config *config,void **out_handle);
 int32_t gdp_ros_aux_set_session_id(void *handle, const char *session_id);
 int32_t gdp_ros_aux_publish_pair(void *handle,const gdp_ros_pair *pair);
+/* Optional additive symbol: owned UTF-8 JSON is copied during the call. */
+int32_t gdp_ros_aux_publish_evidence(void *handle,const char *json,size_t length);
 void gdp_ros_aux_destroy(void *handle);
 #ifdef __cplusplus
 }

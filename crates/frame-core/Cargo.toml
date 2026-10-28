@@ -7,3 +7,6 @@ license = "Apache-2.0"
 description = "Checked frame layouts and bounded ownership-preserving queues"
 
 [dependencies]
+capture-contract = { path = "../capture-contract" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -8,6 +8,7 @@ description = "Bounded, finite single-camera Orbbec acquisition experiment"
 default-run = "capture-probe"
 
 [dependencies]
+capture-contract = { path = "../capture-contract" }
 anyhow = "1.0"
 libc = "0.2"
 ring = "0.17"
@@ -15,3 +16,4 @@ serde_json = "1.0"
 frame-core = { path = "../frame-core" }
 orbbec-safe = { path = "../orbbec-safe" }
 ros-output = { path = "../ros-output" }
+quality-core = { path = "../quality-core" }

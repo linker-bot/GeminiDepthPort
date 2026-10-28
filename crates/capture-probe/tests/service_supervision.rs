@@ -448,3 +448,51 @@ fn slow_sdk_open_cannot_extend_worker_readiness_startup_budget() {
     assert_eq!(events.lines().filter(|l| *l == "stop").count(), 1);
     assert!(!events.lines().any(|l| l == "publish-copied"));
 }
+
+#[test]
+fn protected_worker_failure_cannot_reopen_sdk_until_persistent_gate_is_removed() {
+    let f = fixture();
+    let gate = f.root.join("recording");
+    fs::create_dir(&gate).unwrap();
+    let path = gate.join("control.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&f.config).unwrap()).unwrap();
+    config["service"]["recording_control_path"] = json!(path);
+    config["service"]["generation"] = json!("d".repeat(32));
+    fs::write(&f.config, config.to_string()).unwrap();
+    let mut supervisor = launch(&f);
+    let first = wait_status(&f, &mut supervisor, |v| v["state"] == "ready");
+    let old_pid = first["pid"].as_u64().unwrap();
+    let request = json!({"version":1,"phase":"preparing","request_id":"a".repeat(32),"binding":{"instance_id":first["instance_id"],"session_id":first["session_id"],"generation_id":"d".repeat(32),"configuration_id":"c".repeat(64),"calibration_id":"e".repeat(64)},"snapshot_id":"f".repeat(64),"runtime_config_sha256":first["config_sha256"],"token_sha256":"0".repeat(64)});
+    fs::write(&path, request.to_string()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !gate.join("ack.json").exists() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    let ack: Value = serde_json::from_slice(&fs::read(gate.join("ack.json")).unwrap()).unwrap();
+    assert_eq!(ack["session_id"], first["session_id"]);
+    unsafe {
+        assert_eq!(libc::kill(old_pid as i32, libc::SIGSTOP), 0);
+    }
+    wait_status(&f, &mut supervisor, |v| {
+        v["reason"] == "RECORDING_PROTECTED_RECOVERY_BLOCKED"
+    });
+    thread::sleep(Duration::from_millis(400));
+    assert!(!alive(old_pid));
+    assert_eq!(
+        fs::read_to_string(&f.events)
+            .unwrap()
+            .lines()
+            .filter(|l| *l == "start")
+            .count(),
+        1,
+        "SDK reopened under protection"
+    );
+    assert_eq!(status(&f).unwrap()["session_id"], first["session_id"]);
+    fs::remove_file(&path).unwrap(); // Authenticated manager release is tested separately.
+    let second = wait_status(&f, &mut supervisor, |v| {
+        v["state"] == "ready" && v["session_id"] != first["session_id"]
+    });
+    assert_eq!(second["restart_attempt"], 1);
+    stop(&mut supervisor);
+}

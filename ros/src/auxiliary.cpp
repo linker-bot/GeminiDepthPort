@@ -16,12 +16,12 @@ struct Aux {
   std::shared_ptr<rclcpp::Context> context;
   std::shared_ptr<rclcpp::Node> node;
   rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pairs;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pairs,evidence;
   std::string session_id;
   bool published=false;
   gdp_ros_pair last{};
   ~Aux() {
-    pairs.reset();tf.reset();node.reset();
+    evidence.reset();pairs.reset();tf.reset();node.reset();
     if(context&&context->is_valid()){try{context->shutdown("auxiliary bridge destroyed");}catch(...){}}
   }
 };
@@ -37,9 +37,11 @@ extern "C" int32_t gdp_ros_aux_create(const gdp_ros_aux_config *c,void **out) {
     p->node=std::make_shared<rclcpp::Node>(c->node_name,c->namespace_name,options);
     p->tf=p->node->create_publisher<tf2_msgs::msg::TFMessage>("/tf_static",rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
     p->pairs=p->node->create_publisher<std_msgs::msg::String>(c->pair_metadata_topic,rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile());
-    const auto tfq=p->tf->get_actual_qos().get_rmw_qos_profile(),pq=p->pairs->get_actual_qos().get_rmw_qos_profile();
+    p->evidence=p->node->create_publisher<std_msgs::msg::String>(std::string(c->pair_metadata_topic)+"/evidence",rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile());
+    const auto tfq=p->tf->get_actual_qos().get_rmw_qos_profile(),pq=p->pairs->get_actual_qos().get_rmw_qos_profile(),eq=p->evidence->get_actual_qos().get_rmw_qos_profile();
     if(tfq.reliability!=RMW_QOS_POLICY_RELIABILITY_RELIABLE||tfq.durability!=RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL||tfq.history!=RMW_QOS_POLICY_HISTORY_KEEP_LAST||tfq.depth!=1
-      ||pq.reliability!=RMW_QOS_POLICY_RELIABILITY_RELIABLE||pq.durability!=RMW_QOS_POLICY_DURABILITY_VOLATILE||pq.history!=RMW_QOS_POLICY_HISTORY_KEEP_LAST||pq.depth!=10)throw std::runtime_error("auxiliary actual QoS differs");
+      ||pq.reliability!=RMW_QOS_POLICY_RELIABILITY_RELIABLE||pq.durability!=RMW_QOS_POLICY_DURABILITY_VOLATILE||pq.history!=RMW_QOS_POLICY_HISTORY_KEEP_LAST||pq.depth!=10
+      ||eq.reliability!=RMW_QOS_POLICY_RELIABILITY_RELIABLE||eq.durability!=RMW_QOS_POLICY_DURABILITY_VOLATILE||eq.history!=RMW_QOS_POLICY_HISTORY_KEEP_LAST||eq.depth!=10)throw std::runtime_error("auxiliary actual QoS differs");
     geometry_msgs::msg::TransformStamped transform;
     transform.header.frame_id=c->parent_frame;transform.child_frame_id=c->child_frame;
     transform.header.stamp.sec=c->stamp_sec;transform.header.stamp.nanosec=c->stamp_nanosec;
@@ -75,3 +77,12 @@ extern "C" int32_t gdp_ros_aux_publish_pair(void *handle,const gdp_ros_pair *pai
   }catch(const std::bad_alloc &){return 3;}catch(...){return 2;}
 }
 extern "C" void gdp_ros_aux_destroy(void *handle){try{delete static_cast<Aux *>(handle);}catch(...){}}
+
+extern "C" int32_t gdp_ros_aux_publish_evidence(void *handle,const char *json,size_t length) {
+  if(!handle||!json||length==0||length>65536)return 1;
+  try {auto &p=*static_cast<Aux *>(handle);if(!p.published)return 1;
+    std_msgs::msg::String message;message.data.assign(json,length);
+    if(message.data.find('\0')!=std::string::npos)return 1;
+    p.evidence->publish(std::move(message));return 0;
+  }catch(const std::bad_alloc &){return 3;}catch(...){return 2;}
+}
