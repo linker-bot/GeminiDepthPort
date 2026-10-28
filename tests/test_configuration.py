@@ -1,3 +1,4 @@
+import legacy_support  # Enable the test-only Python behavior oracle.
 import copy
 import importlib.util
 import json
@@ -8,7 +9,7 @@ from unittest.mock import patch
 import yaml
 
 BASE = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('ctl', BASE / 'cameractl.py')
+spec = importlib.util.spec_from_file_location('ctl', BASE / 'tests/legacy_reference/cameractl.py')
 ctl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ctl)
 

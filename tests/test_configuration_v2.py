@@ -1,4 +1,5 @@
 """Synthetic schema and migration cases; no device or consumer configuration."""
+import legacy_support  # Enable the test-only Python behavior oracle.
 import copy
 import json
 import os

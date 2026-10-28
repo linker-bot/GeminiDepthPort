@@ -4,6 +4,8 @@ const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'
 const csrf = document.querySelector('meta[name="csrf-token"]').content;
 const numeric = ['color_width','color_height','color_fps','depth_width','depth_height','depth_fps','color_exposure','color_gain','ir_exposure','ir_gain'];
 const booleans = ['enable_color','enable_depth','enable_color_auto_exposure','enable_ir_auto_exposure'];
+const officialOnly = ['color_exposure','color_gain','ir_exposure','ir_gain','enable_color_auto_exposure','enable_ir_auto_exposure'];
+const parameterSupported = key => draft?.capture_backend !== 'rust' || !officialOnly.includes(key);
 const formats = ['color_format','depth_format'];
 let state, draft, revision, role = null, dirty = false, pending = false, jobBusy = false, polling = false, logMode = 'job';
 let saving = false;
@@ -14,7 +16,7 @@ async function api(path, body) {
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
 }
-const profiles = {gemini_335l:'Gemini 335L', gemini_2:'Gemini 2'};
+const profiles = {gemini_335l:'Gemini 335L', gemini_2:'Gemini 2', gemini_305:'Gemini 305'};
 const model = c => c.model || profiles[c.profile] || c.profile;
 const healthKeys = ['discovery_seconds','sample_seconds','freshness_seconds','min_fps_ratio'];
 function camera() { return draft.cameras.find(c => c.name === role); }
@@ -38,6 +40,7 @@ function showRole() {
   $('role-title').textContent = c.name;
   $('role-subtitle').textContent = `${model(c)} · ${c.namespace || '/' + role + '_camera'}`;
   bindings();
+  $('color_exposure').closest('details').hidden = draft.capture_backend === 'rust';
   numeric.forEach(key => $(key).value = c.parameters[key] ?? (key.endsWith('exposure') || key.endsWith('gain') ? -1 : ''));
   $('v2-fields').hidden = draft.schema_version !== 2;
   $('camera-enabled').checked = c.enabled;
@@ -54,14 +57,14 @@ function showRole() {
 function readForm() {
   if (!draft) return;
   const c = camera(); c.serial_number = $('serial').value;
-  numeric.forEach(key => {if ($(key).value !== '') c.parameters[key] = Number($(key).value);});
+  numeric.forEach(key => {if (parameterSupported(key) && $(key).value !== '') c.parameters[key] = Number($(key).value);});
   if (draft.schema_version === 2) {
     c.enabled = $('camera-enabled').checked;
     for (const key of ['namespace','frame_prefix','timestamp_source','calibration_revision']) c[key] = $('camera-'+key.replaceAll('_','-')).value;
     for (const key of healthKeys) if ($('health-'+key).value !== '') c.health[key] = Number($('health-'+key).value);
     c.verification = null;
   }
-  booleans.forEach(key => c.parameters[key] = $(key).checked);
+  booleans.filter(parameterSupported).forEach(key => c.parameters[key] = $(key).checked);
   formats.forEach(key => c.parameters[key] = $(key).value);
   for (const stream of ['color','depth']) for (const key of ['width','height','fps']) $(stream+'_'+key).required = c.enabled && c.parameters['enable_'+stream];
   c.profiles_verified = false; setDirty(true);
@@ -90,7 +93,7 @@ async function saveConfig() {
   if (!draft) return;
   const cameras = draft.cameras.map(c => ({name:c.name,serial_number:c.serial_number,
     ...(draft.schema_version === 2 ? Object.fromEntries(['enabled','namespace','frame_prefix','timestamp_source','calibration_revision','health'].map(k=>[k,c[k]])) : {}),
-    parameters:Object.fromEntries([...numeric,...booleans,...formats].filter(k => k in c.parameters).map(k=>[k,c.parameters[k]]))}));
+    parameters:Object.fromEntries([...numeric,...booleans,...formats].filter(k => parameterSupported(k) && k in c.parameters).map(k=>[k,c.parameters[k]]))}));
   const result = await api('/api/config', {revision,cameras});
   const fresh = await api('/api/state'); state = fresh; revision = fresh.revision;
   draft = structuredClone(fresh.inventory); setDirty(false); showRole(); notify(result.message);
@@ -106,7 +109,7 @@ function updateButtons() {
   $('save').disabled = pending || jobBusy || !draft;
   document.querySelectorAll('.role-tab').forEach(button => button.disabled = pending);
   $('refresh').disabled = pending;
-  document.querySelectorAll('#camera-form input,#camera-form select').forEach(input => input.disabled = pending || jobBusy || (draft?.schema_version === 2 && formats.includes(input.id)));
+  document.querySelectorAll('#camera-form input,#camera-form select').forEach(input => input.disabled = pending || jobBusy || !parameterSupported(input.id) || (draft?.schema_version === 2 && formats.includes(input.id)));
   updatePreview();
 }
 async function refresh(manual=false) {

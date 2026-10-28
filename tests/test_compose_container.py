@@ -1,3 +1,4 @@
+import legacy_support  # Enable the test-only Python behavior oracle.
 import copy
 import json
 import os

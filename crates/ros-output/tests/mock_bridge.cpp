@@ -1,0 +1,84 @@
+// SPDX-License-Identifier: Apache-2.0
+// Dynamic ABI fixture, uses the real independent validation header but no ROS.
+#include "gdp_ros_bridge.h"
+#include "gdp_ros_session.hpp"
+#include "gdp_ros_validation.hpp"
+#include "gdp_ros_aux_validation.hpp"
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <string>
+#include <vector>
+#include <numeric>
+#ifndef MOCK_ABI_VERSION
+#define MOCK_ABI_VERSION GDP_ROS_ABI_VERSION
+#endif
+struct Mock {
+  uint32_t width, height;
+  std::string frame_id;
+  double focal;
+  std::vector<uint8_t> owned;
+  uint64_t calls = 0;
+  std::string session_id;
+};
+static void event(const char *value) {
+  const char *path = std::getenv("GDP_ROS_MOCK_EVENTS");
+  if (path) { auto *f = std::fopen(path, "a"); if (f) { std::fprintf(f, "%s\n", value); std::fclose(f); } }
+}
+extern "C" uint32_t gdp_ros_abi_version(void) { return MOCK_ABI_VERSION; }
+extern "C" int32_t gdp_ros_create(const gdp_ros_config *c, void **out) {
+  if (!out) return 1;
+  *out = nullptr;
+  if (!gdp_ros::config_valid(c)) return 1;
+  auto p = std::make_unique<Mock>();
+  p->width = c->width; p->height = c->height; p->frame_id = c->frame_id; p->focal = c->k[0];
+  *out = p.release(); event("create");
+  return std::string(c->node_name) == "mock_fail_create" ? 2 : 0;
+}
+extern "C" int32_t gdp_ros_publish(void *handle, const gdp_ros_frame *frame) {
+  if (!handle) return 1;
+  auto &p = *static_cast<Mock *>(handle);
+  if (!gdp_ros::frame_valid(frame, p.width, p.height)) return 1;
+  if (frame->sequence == 1 && (!frame->has_device_timestamp || frame->device_timestamp_us != 0)) return 2;
+  if (frame->sequence == 999) { event("publish-failed"); return 2; }
+  // Caller changes/frees source pixels between calls. Owned first bytes must stay.
+  if (!p.owned.empty() && p.owned[0] != 16) return 2;
+  if (p.frame_id != "test_optical" || p.focal != 1.) return 2;
+  p.owned.assign(frame->data, frame->data + frame->data_len);
+  p.calls++; event("publish-copied");
+  return 0;
+}
+extern "C" void gdp_ros_destroy(void *handle) {
+  delete static_cast<Mock *>(handle); event("destroy");
+}
+struct AuxMock {std::string session_id;std::string parent,child;double translation[3];bool published=false;gdp_ros_pair last{};};
+extern "C" uint32_t gdp_ros_aux_abi_version(void){return MOCK_ABI_VERSION;}
+extern "C" int32_t gdp_ros_aux_create(const gdp_ros_aux_config *c,void **out){
+  if(!out)return 1;
+  *out=nullptr;
+  if(!gdp_ros::aux_config_valid(c))return 1;
+  auto p=std::make_unique<AuxMock>();p->parent=c->parent_frame;p->child=c->child_frame;std::copy(c->translation_m,c->translation_m+3,p->translation);
+  *out=p.release();event("aux-create");return std::string(c->node_name)=="mock_fail_aux_create"?2:0;
+}
+extern "C" int32_t gdp_ros_aux_publish_pair(void *handle,const gdp_ros_pair *pair){
+  if(!handle||!gdp_ros::pair_valid(pair))return 1;
+  auto &p=*static_cast<AuxMock *>(handle);
+  if(p.published && !gdp_ros::pair_advances(*pair,p.last))return 1;
+  if(p.parent!="color_optical"||p.child!="depth_optical"||p.translation[0]!=.1||p.translation[1]!=.2||p.translation[2]!=.3)return 2;
+  if(pair->pair_sequence==999){event("aux-publish-failed");return 2;}
+  p.last=*pair;p.published=true;event("aux-publish");return 0;
+}
+extern "C" void gdp_ros_aux_destroy(void *handle){delete static_cast<AuxMock *>(handle);event("aux-destroy");}
+
+extern "C" int32_t gdp_ros_set_session_id(void *handle,const char *id){
+ if(!handle||!gdp_ros::session_valid(id))return 1;
+ auto &p=*static_cast<Mock *>(handle);
+ if(p.calls||!p.session_id.empty())return 1;
+ p.session_id=id;event("session-bound");return 0;
+}
+extern "C" int32_t gdp_ros_aux_set_session_id(void *handle,const char *id){
+ if(!handle||!gdp_ros::session_valid(id))return 1;
+ auto &p=*static_cast<AuxMock *>(handle);
+ if(p.published||!p.session_id.empty())return 1;
+ p.session_id=id;event("aux-session-bound");return 0;
+}

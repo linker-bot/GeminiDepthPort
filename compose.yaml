@@ -1,6 +1,6 @@
 services:
   web:
-    image: local/orbbec-console:compose-v1
+    image: local/orbbec-console:rust-v1
     build:
       context: .
       dockerfile: web.Dockerfile
@@ -9,8 +9,8 @@ services:
     group_add:
     - ${DOCKER_GID:-0}
     command:
-    - python3
-    - web_server.py
+    - geminidepthport
+    - serve
     - --host
     - 0.0.0.0
     - --port
@@ -26,7 +26,6 @@ services:
       ORBBEC_CONTAINERIZED: '1'
       ORBBEC_DEPLOY_DIR: ${ORBBEC_DEPLOY_DIR:?Run ./deploy.sh web or set ORBBEC_DEPLOY_DIR}
       ORBBEC_PUBLIC_PORT: ${WEB_PORT:-8765}
-      PYTHONUNBUFFERED: '1'
       HOME: /tmp/console-home
       DOCKER_CONFIG: /tmp/docker
       XDG_CACHE_HOME: /tmp/cache
@@ -63,10 +62,10 @@ services:
     healthcheck:
       test:
       - CMD
-      - python3
-      - -c
-      - import urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:8765/healthz',
-        timeout=3)
+      - geminidepthport
+      - http-health
+      - --port
+      - '8765'
       interval: 10s
       timeout: 5s
       retries: 6

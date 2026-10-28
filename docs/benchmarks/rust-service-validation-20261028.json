@@ -1,0 +1,489 @@
+{
+  "artifacts": {
+    "305": {
+      "bridge_sha256": "945059b4941f1fdfd05cb51ac606f4a0363ed7d7dd721e7e2acd3e0f71fdf6e9",
+      "communication_profile": "humble-fastdds-local-udp-v1",
+      "consumer_source_sha256": "ef5f80a9cfdf697e38dd6c11a9c2747ba22bc3687881989e5addfa5d287afef2",
+      "image_id": "sha256:2c658b743666cb762d984ffea6e2ec5dad9f3452ffd230ec48e103f36f0b5dfb",
+      "recorded_runtime_manifest_still_matches": true,
+      "sdk_public_repository": "https://github.com/orbbec/OrbbecSDK_ROS2",
+      "sdk_sha256": "ade25a2a2fd5a3a5d4a8142d62b03fddb0594e1ab04096cdc4cc03c02ed74d2d",
+      "sdk_version": "2.10.6",
+      "service_sha256": "f0914f64c98f67af66ab27b1561b5f282d6704dad7a58a8d3114bd561bd8aab8",
+      "upstream_commit": "c153462518ad674650bafa4464fda72c27ab797a"
+    },
+    "335L": {
+      "bridge_sha256": "945059b4941f1fdfd05cb51ac606f4a0363ed7d7dd721e7e2acd3e0f71fdf6e9",
+      "communication_profile": "humble-fastdds-local-udp-v1",
+      "consumer_source_sha256": "ef5f80a9cfdf697e38dd6c11a9c2747ba22bc3687881989e5addfa5d287afef2",
+      "image_id": "sha256:2c658b743666cb762d984ffea6e2ec5dad9f3452ffd230ec48e103f36f0b5dfb",
+      "recorded_runtime_manifest_still_matches": true,
+      "sdk_public_repository": "https://github.com/orbbec/OrbbecSDK_ROS2",
+      "sdk_sha256": "ade25a2a2fd5a3a5d4a8142d62b03fddb0594e1ab04096cdc4cc03c02ed74d2d",
+      "sdk_version": "2.10.6",
+      "service_sha256": "f0914f64c98f67af66ab27b1561b5f282d6704dad7a58a8d3114bd561bd8aab8",
+      "upstream_commit": "c153462518ad674650bafa4464fda72c27ab797a"
+    }
+  },
+  "claims_not_established": [
+    "three-camera-deployment",
+    "hardware-exposure-synchronization",
+    "physical-depth-accuracy",
+    "business-consumer-compatibility",
+    "ROS-bag-republication-compatibility",
+    "leak-freedom",
+    "performance-improvement-versus-official-driver"
+  ],
+  "models": {
+    "305": {
+      "consumer_long_run": {
+        "association_evictions": 0,
+        "association_tail_drain_seconds": 0.2,
+        "buffer_limit_per_map": 128,
+        "contract_errors": {},
+        "hardware_sync_verified": false,
+        "kind": "rgbd-consumer-observer",
+        "late_tf_subscription_requested": true,
+        "matched_pairs": 54039,
+        "measurement_window_seconds": 1800.0,
+        "mode": "strict-rgbd",
+        "ok": true,
+        "pair_sequence_skipped_values": 0,
+        "physical_scale_verified": false,
+        "qos_observed": [
+          "color:image",
+          "color:info",
+          "color:metadata",
+          "depth:image",
+          "depth:info",
+          "depth:metadata",
+          "pair",
+          "tf"
+        ],
+        "raw_images_recorded": false,
+        "scope": "ROS transport-contract-consumer-not-business-consumer-certification",
+        "streams": {
+          "color": {
+            "active_fps": 30.022140936534495,
+            "age_ms": {
+              "histogram_bounds_ms": [
+                1,
+                2,
+                5,
+                10,
+                20,
+                33,
+                50,
+                75,
+                100,
+                150,
+                250,
+                500,
+                1000,
+                2000,
+                5000,
+                10000
+              ],
+              "histogram_counts": [
+                0,
+                0,
+                2586,
+                45508,
+                5758,
+                175,
+                10,
+                3,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "maximum": 62.386791,
+              "mean": 7.992954657401925,
+              "p99_bucket_upper_bound": 20,
+              "scope": "subscriber-receive-unix-minus-published-system-stamp-not-exposure-latency"
+            },
+            "contract_errors": {},
+            "drop_count_verified": false,
+            "image_gap_events": 0,
+            "images": 54040,
+            "matched_frames": 54040,
+            "source_sequence_skipped_values": 0
+          },
+          "depth": {
+            "active_fps": 30.022268068037118,
+            "age_ms": {
+              "histogram_bounds_ms": [
+                1,
+                2,
+                5,
+                10,
+                20,
+                33,
+                50,
+                75,
+                100,
+                150,
+                250,
+                500,
+                1000,
+                2000,
+                5000,
+                10000
+              ],
+              "histogram_counts": [
+                0,
+                0,
+                4452,
+                40068,
+                9463,
+                34,
+                9,
+                8,
+                5,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "maximum": 122.454725,
+              "mean": 7.868714331106587,
+              "p99_bucket_upper_bound": 20,
+              "scope": "subscriber-receive-unix-minus-published-system-stamp-not-exposure-latency"
+            },
+            "contract_errors": {},
+            "drop_count_verified": false,
+            "image_gap_events": 0,
+            "images": 54040,
+            "matched_frames": 54040,
+            "source_sequence_skipped_values": 0
+          }
+        },
+        "tf_received": true,
+        "unmatched_or_evicted_components": 4,
+        "version": 1
+      },
+      "rosbag2_roundtrip": {
+        "business_consumer_compatible": false,
+        "contract_errors": {},
+        "counts_by_role": {
+          "color:image": 150,
+          "color:info": 150,
+          "color:metadata": 150,
+          "depth:image": 150,
+          "depth:info": 150,
+          "depth:metadata": 150,
+          "pair:pair": 150,
+          "tf:tf": 1
+        },
+        "kind": "private-rosbag2-roundtrip",
+        "late_tf_delivery_verified": false,
+        "live_qos_verified": false,
+        "matched_frames": {
+          "color": 149,
+          "depth": 150
+        },
+        "matched_pairs": 149,
+        "ok": true,
+        "physical_scale_verified": false,
+        "raw_images_recorded_privately": true,
+        "recorded_window_seconds": 4.997993475,
+        "scope": "actual-rosbag2-serialized-record-readback-and-layout-decoding-not-ROS-republication",
+        "serialized_byte_exact": true,
+        "standard_wire_only": false,
+        "stream_errors": {
+          "color": {},
+          "depth": {}
+        },
+        "version": 1
+      }
+    },
+    "335L": {
+      "consumer_long_run": {
+        "association_evictions": 0,
+        "association_tail_drain_seconds": 0.2,
+        "buffer_limit_per_map": 128,
+        "contract_errors": {},
+        "hardware_sync_verified": false,
+        "kind": "rgbd-consumer-observer",
+        "late_tf_subscription_requested": true,
+        "matched_pairs": 53935,
+        "measurement_window_seconds": 1800.0,
+        "mode": "strict-rgbd",
+        "ok": true,
+        "pair_sequence_skipped_values": 0,
+        "physical_scale_verified": false,
+        "qos_observed": [
+          "color:image",
+          "color:info",
+          "color:metadata",
+          "depth:image",
+          "depth:info",
+          "depth:metadata",
+          "pair",
+          "tf"
+        ],
+        "raw_images_recorded": false,
+        "scope": "ROS transport-contract-consumer-not-business-consumer-certification",
+        "streams": {
+          "color": {
+            "active_fps": 29.964263657382343,
+            "age_ms": {
+              "histogram_bounds_ms": [
+                1,
+                2,
+                5,
+                10,
+                20,
+                33,
+                50,
+                75,
+                100,
+                150,
+                250,
+                500,
+                1000,
+                2000,
+                5000,
+                10000
+              ],
+              "histogram_counts": [
+                0,
+                0,
+                14521,
+                33824,
+                5474,
+                112,
+                4,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "maximum": 49.688356,
+              "mean": 6.3024429502920185,
+              "p99_bucket_upper_bound": 20,
+              "scope": "subscriber-receive-unix-minus-published-system-stamp-not-exposure-latency"
+            },
+            "contract_errors": {},
+            "drop_count_verified": false,
+            "image_gap_events": 0,
+            "images": 53935,
+            "matched_frames": 53935,
+            "source_sequence_skipped_values": 0
+          },
+          "depth": {
+            "active_fps": 29.964524467986486,
+            "age_ms": {
+              "histogram_bounds_ms": [
+                1,
+                2,
+                5,
+                10,
+                20,
+                33,
+                50,
+                75,
+                100,
+                150,
+                250,
+                500,
+                1000,
+                2000,
+                5000,
+                10000
+              ],
+              "histogram_counts": [
+                0,
+                0,
+                0,
+                0,
+                10308,
+                43559,
+                48,
+                17,
+                5,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "maximum": 98.815024,
+              "mean": 21.40839769566346,
+              "p99_bucket_upper_bound": 33,
+              "scope": "subscriber-receive-unix-minus-published-system-stamp-not-exposure-latency"
+            },
+            "contract_errors": {},
+            "drop_count_verified": false,
+            "image_gap_events": 0,
+            "images": 53937,
+            "matched_frames": 53937,
+            "source_sequence_skipped_values": 0
+          }
+        },
+        "tf_received": true,
+        "unmatched_or_evicted_components": 5,
+        "version": 1
+      },
+      "rosbag2_roundtrip": {
+        "business_consumer_compatible": false,
+        "contract_errors": {},
+        "counts_by_role": {
+          "color:image": 149,
+          "color:info": 151,
+          "color:metadata": 150,
+          "depth:image": 150,
+          "depth:info": 150,
+          "depth:metadata": 150,
+          "pair:pair": 150,
+          "tf:tf": 1
+        },
+        "kind": "private-rosbag2-roundtrip",
+        "late_tf_delivery_verified": false,
+        "live_qos_verified": false,
+        "matched_frames": {
+          "color": 149,
+          "depth": 150
+        },
+        "matched_pairs": 149,
+        "ok": true,
+        "physical_scale_verified": false,
+        "raw_images_recorded_privately": true,
+        "recorded_window_seconds": 4.999423017,
+        "scope": "actual-rosbag2-serialized-record-readback-and-layout-decoding-not-ROS-republication",
+        "serialized_byte_exact": true,
+        "standard_wire_only": false,
+        "stream_errors": {
+          "color": {},
+          "depth": {}
+        },
+        "version": 1
+      }
+    }
+  },
+  "resource_sampling": {
+    "cpu_unit": "logical-core-equivalents",
+    "elapsed_seconds": 1740.0014941040426,
+    "kind": "cgroup-resource-window",
+    "memory_unit": "bytes-cgroup-including-cache",
+    "ok": true,
+    "results": [
+      {
+        "cpu_cores": 0.2724978085401854,
+        "memory_cgroup_lifetime_peak_bytes": 42192896,
+        "memory_first_bytes": 35717120,
+        "memory_first_quartile_mean_bytes": 35718422.414746545,
+        "memory_last_bytes": 36880384,
+        "memory_last_quartile_mean_bytes": 36897353.14285714,
+        "memory_sample_peak_bytes": 38178816,
+        "model": "305",
+        "oom_kills": 0,
+        "role": "service"
+      },
+      {
+        "cpu_cores": 0.318527104647911,
+        "memory_cgroup_lifetime_peak_bytes": 50745344,
+        "memory_first_bytes": 43020288,
+        "memory_first_quartile_mean_bytes": 43762588.90322581,
+        "memory_last_bytes": 45133824,
+        "memory_last_quartile_mean_bytes": 45201039.92626728,
+        "memory_sample_peak_bytes": 46395392,
+        "model": "335L",
+        "oom_kills": 0,
+        "role": "service"
+      },
+      {
+        "cpu_cores": 0.2172448674790605,
+        "memory_cgroup_lifetime_peak_bytes": 43945984,
+        "memory_first_bytes": 38486016,
+        "memory_first_quartile_mean_bytes": 40062390.85714286,
+        "memory_last_bytes": 42135552,
+        "memory_last_quartile_mean_bytes": 42343749.60368664,
+        "memory_sample_peak_bytes": 43552768,
+        "model": "305",
+        "oom_kills": 0,
+        "role": "consumer"
+      },
+      {
+        "cpu_cores": 0.2155739850057687,
+        "memory_cgroup_lifetime_peak_bytes": 43597824,
+        "memory_first_bytes": 39108608,
+        "memory_first_quartile_mean_bytes": 39776293.751152076,
+        "memory_last_bytes": 42029056,
+        "memory_last_quartile_mean_bytes": 41854834.43317972,
+        "memory_sample_peak_bytes": 43270144,
+        "model": "335L",
+        "oom_kills": 0,
+        "role": "consumer"
+      }
+    ],
+    "samples": 871,
+    "scope": "selected-container-cgroups-only-not-whole-host",
+    "version": 1
+  },
+  "scope": "completed-two-camera-service-consumer-validation-only",
+  "status_sampling": {
+    "elapsed_seconds": 1680.0004794667475,
+    "kind": "resident-service-status-window",
+    "ok": true,
+    "results": {
+      "305": {
+        "counter_deltas": {
+          "pairs_published": 50435,
+          "pairs_rejected": 0,
+          "publish_failures": 0,
+          "restart_attempt": 0
+        },
+        "errors": {},
+        "max_pair_age_ms": 531,
+        "max_status_age_ms": 531,
+        "ok": true,
+        "samples": 841,
+        "session_changes": 0,
+        "states": {
+          "ready": 841
+        }
+      },
+      "335L": {
+        "counter_deltas": {
+          "pairs_published": 50346,
+          "pairs_rejected": 0,
+          "publish_failures": 0,
+          "restart_attempt": 0
+        },
+        "errors": {},
+        "max_pair_age_ms": 533,
+        "max_status_age_ms": 533,
+        "ok": true,
+        "samples": 841,
+        "session_changes": 0,
+        "states": {
+          "ready": 841
+        }
+      }
+    },
+    "scope": "sampled-status-not-ROS-delivery",
+    "version": 1
+  },
+  "validation_date": "2026-10-28",
+  "version": 1
+}

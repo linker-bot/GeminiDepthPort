@@ -1,8 +1,12 @@
+> 更新：Rust 管理链路、SDK RAII、RGB-D/真实标定/TF 和可选常驻采集后端已实现；当前部署及验收入口见 [Rust 采集部署](rust-capture-deployment.md) 和 [消费侧验收](rust-service-acceptance.md)。下文是原始阶段规划，不应按历史措辞推断当前功能仍未实现。长期硬件、规模和收益须以实际验收报告为准。
+
+> 当前状态：管理链路已迁移到 Rust，详见 [Rust 管理链路](rust-management.md)。下文保留原始性能决策背景；正式 C++ SDK/ROS 采集未被此次迁移替换。独立 SDK 探针见 [Rust 数据面](rust-data-plane.md)。
+
 # Rust 迁移路线
 
 当前提交初始化已有 Python/Web/Compose 原型，不引入没有实现的 Cargo workspace，也不把 SDK 的 C/C++ 采集称为 Rust 原生采集。
 
-## 当前前置阶段：测量与定点验证，不写 Rust
+## SDK/驱动优化前置阶段：测量与定点验证
 
 先执行 [性能评估](PERFORMANCE.md) 与 [基准测试方案](BENCHMARKS.md)。目标平台为 13900K 级或以上的 Linux 主机，主机 SDK/驱动、健康检查、预览和 Web 展示分别对照。当前没有真机收益结论；理论模型和候选验收目标不能当成已实现性能。
 

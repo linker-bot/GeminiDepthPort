@@ -22,7 +22,7 @@ import lifecycle
 import operation_guard as guard
 from configuration import ConfigurationError, MODEL_PROFILES, validate_inventory as validate
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 INV = ROOT / 'inventory.json'
 PROJECT = 'orbbec-multicam'
 
@@ -412,13 +412,3 @@ def main():
     elif a.command == 'logs':
         for item in lifecycle.instances(controller()):
             run(['docker', 'logs', '--tail', '100', item['Id']])
-
-if __name__ == '__main__':
-    try:
-        if sys.argv[1:] == ['image-ref']:
-            main()  # Read-only helper also used while the host holds the shared lock.
-        else:
-            with control_lock(): main()
-    except (AssertionError, RuntimeError, ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
-        print('ERROR:', str(exc) if isinstance(exc, ConfigurationError) else 'Operation failed; inspect private diagnostics', file=sys.stderr)
-        raise SystemExit(1)

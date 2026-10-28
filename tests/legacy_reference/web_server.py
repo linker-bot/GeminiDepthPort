@@ -20,7 +20,7 @@ from urllib.parse import urlparse, parse_qs
 import yaml
 import cameractl as ctl
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 ROLES = ('head', 'wrist')
 EDITABLE = {'enable_color', 'color_width', 'color_height', 'color_fps', 'color_format',
             'enable_depth', 'depth_width', 'depth_height', 'depth_fps', 'depth_format',
@@ -484,5 +484,3 @@ def main():
         manager.closed.set(); server.server_close()
         try: manager.stop_previews()
         except Exception: pass
-
-if __name__ == '__main__': main()

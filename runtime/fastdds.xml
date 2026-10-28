@@ -4,6 +4,9 @@
     <transport_descriptor>
       <transport_id>udp_only</transport_id>
       <type>UDPv4</type>
+      <!-- ROS_LOCALHOST_ONLY=0 avoids Humble RMW injecting a SHM transport.
+           This explicit whitelist retains local-only UDP isolation. -->
+      <interfaceWhiteList><address>127.0.0.1</address></interfaceWhiteList>
     </transport_descriptor>
   </transport_descriptors>
   <participant profile_name="udp_participant" is_default_profile="true">

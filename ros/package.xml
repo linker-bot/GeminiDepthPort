@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>geminidepthport_ros_bridge</name>
+  <version>0.1.0</version>
+  <description>Experimental Rust data-plane ROS Image and CameraInfo publisher bridge.</description>
+  <maintainer email="maintainers@example.invalid">GeminiDepthPort maintainers</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_msgs</depend>
+  <test_depend>rclpy</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

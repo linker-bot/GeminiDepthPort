@@ -1,0 +1,16 @@
+*
+!capture.Dockerfile
+!Cargo.toml
+!Cargo.lock
+!driver_profiles.json
+!src/
+!src/**
+!crates/
+!crates/**
+!ros/
+!ros/**
+!runtime/
+!runtime/**
+!scripts/
+!scripts/capture-runtime/
+!scripts/capture-runtime/**

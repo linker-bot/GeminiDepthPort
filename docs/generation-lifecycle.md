@@ -64,8 +64,8 @@ schema v2 的图像探针同时检查声明的编码、尺寸、载荷布局、�
 受控调用方可使用以下接口，凭证和输出不得公开或提交：
 
 ```sh
-python3 cameractl.py protect
-python3 cameractl.py release-protection
+geminidepthport protect
+geminidepthport release-protection
 ```
 
 释放命令从标准输入接收凭证，避免将凭证放入命令参数。持有方负责在录制明确结束后释放；保护没有自动过期机制。管理进程重启、持有方失联、保护文件损坏均不会自动解除保护并中断采集。凭证丢失或状态损坏时，必须在受控维护流程确认录制结束后处理，不能直接删除记录继续启动。

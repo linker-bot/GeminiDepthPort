@@ -1,6 +1,15 @@
-# Official Docker CLI image includes the Compose plugin. No Docker daemon runs inside Web.
+FROM rust:1.90-alpine AS management-build
+RUN apk add --no-cache build-base
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY driver_profiles.json ./driver_profiles.json
+# Preserve the shared workspace; only the management package is built here.
+COPY crates ./crates
+RUN cargo build --locked --release -p geminidepthport
+
+# Docker CLI and Compose only; the management image has no Python runtime.
 FROM docker:27-cli
-RUN apk add --no-cache python3 py3-yaml bash
-ENV PYTHONUNBUFFERED=1
-# Application and mutable config are mounted at the identical absolute host path.
-# deploy.sh provides working_dir, command, and all host bindings through Compose.
+RUN apk add --no-cache bash
+COPY --from=management-build /build/target/release/geminidepthport /usr/local/bin/geminidepthport
+# Application assets and mutable state use the identical absolute host bind path.

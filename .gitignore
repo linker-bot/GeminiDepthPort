@@ -11,3 +11,4 @@ state/
 .pytest_cache/
 .coverage
 htmlcov/
+target/

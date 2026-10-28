@@ -1,0 +1,12 @@
+[package]
+name = "ros-output"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1.0"
+frame-core = { path = "../frame-core" }
+orbbec-safe = { path = "../orbbec-safe" }
+libc = "0.2"
+serde_json = { version = "1.0", features = ["float_roundtrip"] }

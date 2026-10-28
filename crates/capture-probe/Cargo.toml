@@ -1,0 +1,17 @@
+[package]
+name = "capture-probe"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Bounded, finite single-camera Orbbec acquisition experiment"
+default-run = "capture-probe"
+
+[dependencies]
+anyhow = "1.0"
+libc = "0.2"
+ring = "0.17"
+serde_json = "1.0"
+frame-core = { path = "../frame-core" }
+orbbec-safe = { path = "../orbbec-safe" }
+ros-output = { path = "../ros-output" }

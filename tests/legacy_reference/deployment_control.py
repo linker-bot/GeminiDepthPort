@@ -33,13 +33,3 @@ def start(mode):
         finally:
             job['finished_at'] = time.time()
             if mode == 'boot': manager.persist_job(job)
-
-
-if __name__ == '__main__':
-    try:
-        mode = sys.argv[1] if len(sys.argv) == 2 else ''
-        if mode not in ('up', 'boot'): raise ValueError('Expected up or boot')
-        raise SystemExit(start(mode))
-    except (ValueError, OSError, RuntimeError):
-        print('ERROR: Checked startup failed; inspect controlled status.', file=sys.stderr)
-        raise SystemExit(1)

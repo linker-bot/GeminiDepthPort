@@ -6,10 +6,18 @@
 
 1. 通过 Web 保存配置并逐台预览、检查档位。原生 YUYV 镜像能力与补丁摘要不符时拒绝预览；实际图像和 CameraInfo QoS 不符时拒绝确认。正式采集与调试预览互斥。
 2. 停止调试预览，生成版本并启动相机组。只有全部启用流通过实际检查才报告整组就绪。每台设备由一个驱动持有，消费方只订阅 ROS 数据。
-3. 在管理容器执行 `python3 cameractl.py calibration-export`。控制端锁定配置并核验当前非草稿版本、实际运行实例与出流，再从已运行采集容器内订阅 CameraInfo 和静态 TF，验证后保存私有快照。命令仅返回允许公开的摘要，不输出标定数值、设备身份或话题绑定。
+3. 在管理容器执行 `geminidepthport calibration-export`。控制端锁定配置并核验当前非草稿版本、实际运行实例与出流，再从已运行采集容器内订阅 CameraInfo 和静态 TF，验证后保存私有快照。命令仅返回允许公开的摘要，不输出标定数值、设备身份或话题绑定。
 4. 在实际消费方 ROS/RMW 环境按 [acceptance.md](acceptance.md) 执行全部必需流的验收。补齐已知距离测量、时间映射和实际通信证据，不能仅以驱动容器内部自检代替消费环境验证。
 5. 正式录制前获取录制保护并核对配置版本与标定适用性。明确结束或取消后释放；请求超时或调用方崩溃时先确认实际录制状态，不自动解除保护。
 6. 完成录制容器与后处理往返，并验收断流、设备重连、管理服务重启和时间回退。项目不内置某个消费项目的录制格式或专用入口。
+
+## Rust 后端补充
+
+可选常驻后端见 [部署说明](rust-capture-deployment.md)。它沿用相同 Image/CameraInfo 话题及录制保护入口，增加 frame_metadata 与 rgbd/pair_metadata；严格消费者应按显式 session 和各自 stamp 关联，不能仅靠两路到达顺序。
+
+Humble 的 `ROS_LOCALHOST_ONLY=1` 会在 XML 配置之后追加 SHM transport。Rust 后端与消费容器使用 `ROS_LOCALHOST_ONLY=0`，同时加载仓库 `runtime/fastdds.xml`：仅启用 UDPv4、显式白名单 `127.0.0.1`、禁用内建 transport。这样仍限制为本机通信，并使私有 IPC 的跨容器大帧交付可重复验收。两端必须同时使用该组合；只改一个环境变量不能等价替代完整通信配置。对应行为见 [Humble RMW 的 participant 初始化实现](https://github.com/ros2/rmw_fastrtps/blob/humble/rmw_fastrtps_shared_cpp/src/participant.cpp#L151-L160)。
+
+完整配对观察、标准 ROSbag2 读回和源时间检查见 [消费侧验收](rust-service-acceptance.md)。这些公开工具不读取其他业务项目配置，也不代表其专用录制和后处理程序已认证兼容。
 
 ## QoS 与通信边界
 

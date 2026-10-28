@@ -4,27 +4,25 @@
 
 # Web 相机工作台
 
-默认提供三个相机槽位，采用 Web 引导与按启用列表生成的 Compose 部署，见 [一键部署与开机自启](docs/COMPOSE.md)。下面的宿主机 Python 方式用于开发调试。
+默认提供三个相机槽位，采用 Web 引导与按启用列表生成的 Compose 部署，见 [一键部署与开机自启](docs/COMPOSE.md)。下面的宿主机 Rust 方式用于开发调试。
 
-这是连接既有配置工具和 ROS 2 相机容器的本机管理程序，包含真实接口与预览采集实现。前端为原生 HTML/CSS/JavaScript，无需 Node.js 或 npm 构建；宿主机后端使用 Python 标准库 HTTP 服务与 PyYAML，ROS/OpenCV/NumPy 仅放在相机镜像中。
+这是连接既有配置工具和 ROS 2 相机容器的本机管理程序，包含真实接口与预览采集实现。前端为原生 HTML/CSS/JavaScript，无需 Node.js 或 npm 构建；管理后端使用 Rust 二进制 `geminidepthport`，ROS/OpenCV/NumPy 仅放在相机镜像中。
 
 ## 容器部署
 
 推荐使用仓库根 README 的 `sudo ./deploy.sh install`，或仅运行 `./deploy.sh web` 启动管理容器。Web 仅映射到宿主机回环地址，正式相机由独立容器采集。Web 容器挂载 Docker socket，具有主机管理能力；只供可信管理用户使用。
 
-`deploy.sh install` 还会安装 udev 规则并启用 systemd。管理界面、脚本和开机流程共用 `deployment_control.py` 的受检相机启动路径。首次未绑定设备时，开机流程保留 Web 供配对，不直接启动相机。
+`deploy.sh install` 还会安装 udev 规则并启用 systemd。管理界面、脚本和开机流程共用 Rust 的受检相机启动路径。首次未绑定设备时，开机流程保留 Web 供配对，不直接启动相机。
 
 ## 宿主机直接启动（开发方式）
 
 先按 README 完成 Linux Docker 环境、udev 规则和镜像构建。Web 服务需要以能访问 Docker 的普通管理用户运行；它直接使用宿主机 Docker CLI，不要求宿主机安装 ROS。
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-# 新镜像包含预览桥接程序，旧 v2 镜像不能用于 Web 预览
-python3 cameractl.py build
-python3 web_server.py --port 8765
+cargo build --locked --release -p geminidepthport
+# 使用匹配当前接口的采集镜像
+./target/release/geminidepthport build
+./target/release/geminidepthport serve --port 8765
 ```
 
 在该 Linux 主机浏览器打开 `http://127.0.0.1:8765`。端口被占用时可换端口，或用 `--port 0` 让系统分配空闲端口，使用终端打印的实际地址。
@@ -47,7 +45,7 @@ ssh -L 8765:127.0.0.1:8765 用户@机器人主机
 6. **生成与启动**：全部启用设备确认后，点击“生成部署配置”或直接“检查并启动相机组”。后者要求先显式停止调试预览，再核对不可变生成版本，再执行 Linux 预检、按稳定逻辑顺序逐台启动并检查健康，以及全部启用设备运行中的复查。失败不会假报整组就绪，已启动容器保留以便诊断。
 7. **运行检查/停止**：“检查运行画面”对正式 ROS 图像进行检查；“停止正式服务”不受未保存表单影响，不会先保存参数。此版正式服务运行时不提供浏览器实时预览，需要停止正式服务再进入调试预览。
 
-构建、生成、预检、启动、运行检查和停止作为后台任务执行，界面显示逐行日志。任务一次只运行一个；CLI 和 Web 也通过同一 state/control.lock 排斥生命周期操作。请只运行一个 Web 管理进程。
+构建、生成、预检、启动、运行检查和停止作为后台任务执行，界面显示逐行日志。任务一次只运行一个；CLI 和 Web 也通过同一 state/control.lock 排斥生命周期操作。同一部署通过独立文件锁保证只有一个 Web 管理进程，重复启动会返回 `WEB_BUSY`。
 
 ## 预览语义
 
@@ -69,11 +67,14 @@ ssh -L 8765:127.0.0.1:8765 用户@机器人主机
 - `state/control.lock`：跨进程生命周期操作锁。
 - `work/web-preview/*`：临时预览配置、租约、状态和最新 JPEG。
 
-Web 不是常驻 ROS 数据网关，正式相机容器可以在 Web 停止后独立运行。正式相机 restart: no、管理容器 unless-stopped；相机由统一脚本/systemd 顺序恢复。私有 IPC、UDP DDS 和同机 namespace 设计保持适用，详见 README。镜像标签已更新为 web-v3，需重新构建，不能只替换前端文件。
+Web 不是常驻 ROS 数据网关，正式相机容器可以在 Web 停止后独立运行。正式相机 restart: no、管理容器 unless-stopped；相机由统一脚本/systemd 顺序恢复。私有 IPC、UDP DDS 和同机 namespace 设计保持适用，详见 README。管理镜像已切换到 rust-v1，需重新构建，不能只替换前端文件。详见 [Rust 管理链路](docs/rust-management.md)。
 
 ## 测试与本次验证边界
 
 ```bash
+cargo test --locked -p geminidepthport
+cargo build --locked -p geminidepthport
+python3 tests/rust/test_management.py
 pip install -r requirements-test.txt
 python3 -m unittest discover -s tests -v
 node --check web/app.js  # 仅开发检查需要 Node.js，运行 Web 不需要
@@ -81,7 +82,7 @@ python3 -m compileall -q .
 ORBBEC_DEPLOY_DIR="$PWD" docker compose -f compose.yaml --profile cameras config --quiet
 ```
 
-当前 57 项离线测试通过，覆盖配置、型号接口、模拟图像健康、Web 绑定/保存、型号混绑拒绝、旧 revision、操作锁、请求来源/CSRF、任务结果保存、预览命令生成、确认档位调用真实健康检查的流程，以及图像缓冲区行步长/大小端处理。后端 Docker/ROS 调用在这些流程测试中使用替身；预览 JPEG 编码依赖容器中的 OpenCV，未在本机完成实际编码或 ROS 联调。
+历史 Python 原型的离线测试，覆盖配置、型号接口、模拟图像健康、Web 绑定/保存、型号混绑拒绝、旧 revision、操作锁、请求来源/CSRF、任务结果保存、预览命令生成、确认档位调用真实健康检查的流程，以及图像缓冲区行步长/大小端处理。后端 Docker/ROS 调用在这些流程测试中使用替身；预览 JPEG 编码依赖容器中的 OpenCV，未在本机完成实际编码或 ROS 联调。
 
 最终版本还通过实际回环 HTTP 冒烟测试：页面/状态/配置保存返回成功，非法操作、缺少 CSRF 和外部 Host 被拒绝。
 

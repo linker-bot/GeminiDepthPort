@@ -8,7 +8,7 @@
 
 ## 新模型
 
-`configuration.py` 负责 schema 校验、确认摘要、配置变更失效和纯迁移预览；`driver_profiles.json` 是依据公开上游 launch 参数建立的型号目录。型号选择与逻辑位置分离，同一型号可以绑定多个逻辑相机，但不能自行指定 launch 可执行文件。
+`src/config.rs` 负责 schema 校验、确认摘要、配置变更失效和纯迁移预览；`driver_profiles.json` 是依据公开上游 launch 参数建立的型号目录。型号选择与逻辑位置分离，同一型号可以绑定多个逻辑相机，但不能自行指定 launch 可执行文件。
 
 每台相机分别声明：
 
@@ -33,7 +33,7 @@
 在已安装项目依赖的环境执行：
 
 ```sh
-python3 cameractl.py validate --file inventory.v2.example.json --draft
+geminidepthport validate --file inventory.v2.example.json --draft
 ```
 
 输出只包含校验状态、schema 版本、启用数量和硬件验证标记。`--draft` 允许未确认的配置，不代表设备健康。省略 `--draft` 时，启用相机必须携带与当前配置相符的检查证据。
@@ -47,7 +47,7 @@ python3 cameractl.py validate --file inventory.v2.example.json --draft
 迁移工具只读取受控环境当前的旧版 inventory，不从其他项目导入信息。
 
 ```sh
-python3 cameractl.py migrate
+geminidepthport migrate
 ```
 
 默认只返回摘要和 `plan_digest`，不写 inventory、不导出原始参数。迁移规则：
@@ -63,7 +63,7 @@ python3 cameractl.py migrate
 只有核对迁移预览后才应用：
 
 ```sh
-python3 cameractl.py migrate --apply --expected-plan <plan_digest>
+geminidepthport migrate --apply --expected-plan <plan_digest>
 ```
 
 使用映射时，预览与应用必须传入相同的 `--bindings` 文件。源文件字节或映射发生变化后，旧摘要将被拒绝。

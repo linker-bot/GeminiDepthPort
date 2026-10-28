@@ -20,7 +20,7 @@ def require(condition, code, message):
         raise ConfigurationError(code, message)
 
 
-PROFILE_CATALOG = json.loads((Path(__file__).parent / 'driver_profiles.json').read_text())
+PROFILE_CATALOG = json.loads((Path(__file__).resolve().parents[2] / 'driver_profiles.json').read_text())
 MODEL_PROFILES = {
     role: (PROFILE_CATALOG['profiles'][profile]['model'], PROFILE_CATALOG['profiles'][profile]['launch_file'])
     for role, profile in (('head', 'gemini_335l'), ('wrist', 'gemini_2'))

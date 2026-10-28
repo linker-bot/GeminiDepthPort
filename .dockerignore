@@ -14,3 +14,18 @@
 !tests/cpp/
 !tests/cpp/**
 !tests/ros_native_yuyv_smoke.py
+
+# Rust management is also built by Docker-compatible engines that use only this ignore file.
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+!crates/
+!crates/**
+
+# Explicit Rust data-plane image context (also see its dedicated ignore file).
+!capture.Dockerfile
+!ros/
+!ros/**
+!scripts/capture-runtime/
+!scripts/capture-runtime/**

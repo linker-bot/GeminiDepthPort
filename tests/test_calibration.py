@@ -1,4 +1,5 @@
 """Synthetic calibration evidence only; no camera identity or physical claims."""
+import legacy_support  # Enable the test-only Python behavior oracle.
 import copy
 import json
 from pathlib import Path

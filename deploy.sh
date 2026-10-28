@@ -77,7 +77,7 @@ install_rules() {
   mkdir -p /etc/udev/rules.d
   local temporary image
   temporary=$(mktemp "$ROOT/state/udev.XXXXXX")
-  image=$(compose exec -T web python3 cameractl.py image-ref)
+  image=$(compose exec -T web geminidepthport image-ref)
   if ! docker run --rm --network none --cap-drop ALL --entrypoint /bin/cat "$image" /opt/host-udev/99-obsensor-libusb.rules > "$temporary"; then
     rm -f "$temporary"; fail 'Failed to extract device rules from camera image.'
   fi
@@ -99,9 +99,9 @@ enable_autostart() {
   systemctl enable --now "$UNIT"
 }
 stop_stack() {
-  # A one-off management helper shares the Python lock and interlock. The running
+  # A one-off management helper shares the cross-process lock and interlock. The running
   # management container remains alive until camera/preview shutdown succeeds.
-  compose run --rm --no-deps -T web python3 cameractl.py stack-stop "$@"
+  compose run --rm --no-deps -T web geminidepthport stack-stop "$@"
 }
 command=${1:-help}
 case "$command" in help|-h|--help) usage; exit 0;; esac
@@ -116,7 +116,7 @@ case "$command" in
     compose build web
     web_ready
     stack_unlock
-    compose exec -T web python3 cameractl.py build
+    compose exec -T web geminidepthport build
     stack_lock
     install_rules
     stack_unlock
@@ -133,17 +133,17 @@ case "$command" in
     stack_lock
     web_ready
     stack_unlock
-    compose exec -T web python3 deployment_control.py "$command"
+    compose exec -T web geminidepthport "$command"
     ;;
   stop) stop_stack;;
   down) stop_stack --remove;;
   status) docker ps -a --filter "label=com.docker.compose.project=$PROJECT";;
-  logs) compose run --rm --no-deps -T web python3 cameractl.py logs;;
+  logs) compose run --rm --no-deps -T web geminidepthport logs;;
   enable-autostart) enable_autostart;;
   disable-autostart)
     [[ $EUID == 0 ]] || fail 'Run with sudo to disable systemd startup.'
     stop_stack
-    systemctl disable "$UNIT"
+    systemctl disable --now "$UNIT"
     ;;
   *) usage; fail "Unknown command: $command";;
 esac

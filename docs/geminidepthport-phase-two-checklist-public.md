@@ -1,3 +1,5 @@
+> 本文保留原始阶段计划。当前管理入口为 Rust；文中旧 Python 管理模块已移至 `tests/legacy_reference/`，仅用于回归测试。详见 [Rust 管理链路](rust-management.md)。
+
 # GeminiDepthPort 阶段二修改清单（公开版）
 
 状态：修改包 A 的配置模型与兼容迁移，以及修改包 B 的生成与生命周期编排已实现，见[配置说明](configuration-v2.md)与[生命周期说明](generation-lifecycle.md)。修改包 B 通过离线和合成部署验证。修改包 C 已加入公开官方驱动的最小适配、来源核验及合成测试；完整驱动构建与真机验收尚未确认完成，其他修改包仍待实施。
@@ -154,8 +156,8 @@
 
 文件位置依据规划时读取的公开主分支，实施前应重新核对；新增模块名称为建议，不表示已存在。
 
-- [控制与配置生成](https://github.com/soulteary/GeminiDepthPort/blob/main/cameractl.py)
-- [统一启动入口](https://github.com/soulteary/GeminiDepthPort/blob/main/deployment_control.py)
+- [控制与配置生成](https://github.com/soulteary/GeminiDepthPort/blob/main/tests/legacy_reference/cameractl.py)
+- [统一启动入口](https://github.com/soulteary/GeminiDepthPort/blob/main/tests/legacy_reference/deployment_control.py)
 - [运行时校验](https://github.com/soulteary/GeminiDepthPort/blob/main/runtime/validate_runtime.py)
 - [预览桥接](https://github.com/soulteary/GeminiDepthPort/blob/main/runtime/preview_bridge.py)
 

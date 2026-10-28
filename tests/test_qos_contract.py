@@ -1,4 +1,5 @@
 """Synthetic offered policies; no endpoint names, identifiers or camera data."""
+import legacy_support  # Enable the test-only Python behavior oracle.
 import copy
 import json
 from pathlib import Path

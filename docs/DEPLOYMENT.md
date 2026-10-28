@@ -1,3 +1,5 @@
+> 当前默认是三机 schema v2 + Rust 管理服务，部署步骤以 [Compose 部署](COMPOSE.md) 和 [Rust 管理链路](rust-management.md) 为准。下面保留旧版双机参数与验收背景，不代表当前默认档位。
+
 # 头部 Gemini 335L + 腕部 Gemini 2：Linux 双相机服务
 
 默认通过 [Compose 一键部署与开机自启](COMPOSE.md) 部署，本页保留相机参数、机器人 TF 和真机验收细节。
@@ -13,7 +15,7 @@
 
 ## 配置与型号适配
 
-编辑 `inventory.json`，再由 `cameractl.py render` 生成：
+编辑 `inventory.json`，再由 `geminidepthport render` 生成：
 
 - `config/head/camera.yaml` 与 `config/head/health.json`。
 - `config/wrist/camera.yaml` 与 `config/wrist/health.json`。
@@ -38,15 +40,13 @@ Gemini 2 官方规格列有 640×400 深度，不能把上一版通用的 640×4
 
 ## Linux 准备与构建
 
-推荐原生 Ubuntu 22.04/24.04 Linux、rootful Docker Engine、Compose v2.20+。宿主机不需要安装 ROS，需要 Python 3.8+ 和 PyYAML。macOS/Windows Docker Desktop、rootless Docker 不作为本模板真机目标。
+推荐原生 Ubuntu 22.04/24.04 Linux、rootful Docker Engine、Compose v2.20+。宿主机不需要安装 ROS 或 Python；直接开发管理服务需要 Rust 1.85+。macOS/Windows Docker Desktop、rootless Docker 不作为本模板真机目标。
 
 在解压目录执行：
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-python3 cameractl.py build
+cargo build --locked --release -p geminidepthport
+./target/release/geminidepthport build
 ```
 
 共用镜像 `local/orbbec-head-wrist:c153462518ad-web-v3`，与旧模板标签区分，包含新版入口及预览桥接程序。构建需要 GitHub、Ubuntu 和 ROS 包源；离线现场提前构建/导入镜像。SDK/固件兼容性和 x86_64/arm64 支持需在目标平台确认。源码已锁 commit，基础镜像和 APT 包尚未按 digest/版本锁定；正式发布建议锁镜像 digest，保留构建产物。
@@ -54,7 +54,7 @@ python3 cameractl.py build
 从镜像导出匹配的 udev 规则，安装到 Linux 主机：
 
 ```bash
-IMAGE=$(python3 -c 'import json; print(json.load(open("inventory.json"))["image"])')
+IMAGE=$(./target/release/geminidepthport image-ref)
 CID=$(docker create "$IMAGE")
 docker cp "$CID:/opt/host-udev/99-obsensor-libusb.rules" ./99-obsensor-libusb.rules
 docker rm "$CID"
@@ -78,10 +78,10 @@ cat /sys/module/usbcore/parameters/usbfs_memory_mb
 先关闭其他 Viewer、宿主机采集进程和旧容器，避免争抢设备。本项目 devices 命令只检查同一 Compose 项目是否停止，无法排除外部进程占用。
 
 ```bash
-python3 cameractl.py scan
-python3 cameractl.py devices
-python3 cameractl.py bind head 头部335L的实际序列号
-python3 cameractl.py bind wrist 腕部Gemini2的实际序列号
+geminidepthport scan
+geminidepthport devices
+geminidepthport bind head 头部335L的实际序列号
+geminidepthport bind wrist 腕部Gemini2的实际序列号
 ```
 
 scan 读取 Linux USB sysfs，报告设备名、序列号、端口、连接速度；devices 在一次性容器中运行官方 list_devices_node。若设备在 sysfs 中不提供序列号，预检会拒绝启动，需要扩展为 SDK 枚举检查，不会自动打开“第一台相机”。
@@ -89,14 +89,14 @@ scan 读取 Linux USB sysfs，报告设备名、序列号、端口、连接速�
 分别在官方工具中枚举/试采集对应档位，退出工具释放设备，再确认：
 
 ```bash
-python3 cameractl.py confirm-profile head
-python3 cameractl.py confirm-profile wrist
-python3 cameractl.py validate
-python3 cameractl.py render
-python3 cameractl.py preflight
-python3 cameractl.py up
-python3 cameractl.py status
-python3 cameractl.py check
+geminidepthport confirm-profile head
+geminidepthport confirm-profile wrist
+geminidepthport validate
+geminidepthport render
+geminidepthport preflight
+geminidepthport up
+geminidepthport status
+geminidepthport check
 ```
 
 confirm-profile 是操作者对实际验证的记录，不会执行自动能力探测，也不代表双机吞吐或机器人任务验收完成。初始 REPLACE_* 序列号和 profiles_verified=false 会阻止启动。bind/set 后会清除档位确认，要求重新检查。render 要求本项目全部容器停止；render --draft 仅供离线生成草稿，不能通过 up 启动。
@@ -104,14 +104,14 @@ confirm-profile 是操作者对实际验证的记录，不会执行自动能力�
 修改采集参数可以编辑 inventory.json，也可使用 JSON 值的 CLI：
 
 ```bash
-python3 cameractl.py down
-python3 cameractl.py set wrist color_fps 15
-python3 cameractl.py set wrist depth_fps 15
-python3 cameractl.py set wrist color_format '"MJPG"'
+geminidepthport down
+geminidepthport set wrist color_fps 15
+geminidepthport set wrist depth_fps 15
+geminidepthport set wrist color_format '"MJPG"'
 # 重新完成单台档位试采集后
-python3 cameractl.py confirm-profile wrist
-python3 cameractl.py render
-python3 cameractl.py up
+geminidepthport confirm-profile wrist
+geminidepthport render
+geminidepthport up
 ```
 
 修改配置统一采用维护窗口：down → 修改/验证 → render → up。render-lock.json 会检查配置漂移，但不是安全签名。
@@ -178,11 +178,11 @@ docker compose -p orbbec-multicam logs --tail 100 camera_head
 docker compose -p orbbec-multicam logs -f camera_wrist
 # 故障诊断后仅重启对应实例，再复查整组
 docker compose -p orbbec-multicam restart camera_wrist
-python3 cameractl.py check
-python3 cameractl.py down
+geminidepthport check
+geminidepthport down
 ```
 
-当前正式相机使用 restart: no，由 deploy.sh / systemd 调用 deployment_control.py 顺序启动并检查，避免 Docker 自动并行恢复绕过门槛。管理容器使用 unless-stopped。unhealthy 本身不会触发 Docker 自动重启；运行中恢复仍需依据业务和真机结果处理。
+当前正式相机使用 restart: no，由 deploy.sh / systemd 调用 Rust 管理入口顺序启动并检查，避免 Docker 自动并行恢复绕过门槛。管理容器使用 unless-stopped。unhealthy 本身不会触发 Docker 自动重启；运行中恢复仍需依据业务和真机结果处理。
 
 ## 真机验收与迁移
 

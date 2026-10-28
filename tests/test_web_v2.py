@@ -1,4 +1,5 @@
 """Synthetic three-camera Web integration; no real device identities or capture."""
+import legacy_support  # Enable the test-only Python behavior oracle.
 import copy
 import json
 from pathlib import Path

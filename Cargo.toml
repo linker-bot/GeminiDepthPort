@@ -1,0 +1,26 @@
+[workspace]
+members = ["crates/frame-core", "crates/orbbec-sys", "crates/orbbec-safe", "crates/capture-probe", "crates/ros-output"]
+resolver = "3"
+
+[package]
+name = "geminidepthport"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "GeminiDepthPort host management service and CLI"
+
+[dependencies]
+anyhow = "1.0"
+libc = "0.2"
+regex = "1.12"
+ring = "0.17"
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+subtle = "2.6"
+tempfile = "3.27"
+tiny_http = "0.12"
+url = "2.5"
+
+[profile.release]
+lto = "thin"
+strip = true

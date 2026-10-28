@@ -1,2 +1,9 @@
 *
 !web.Dockerfile
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+!crates/
+!crates/**
+!driver_profiles.json

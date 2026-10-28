@@ -1,4 +1,5 @@
 """All startup surfaces delegate to the same non-destructive lifecycle path."""
+import legacy_support  # Enable the test-only Python behavior oracle.
 from pathlib import Path
 import sys
 import tempfile

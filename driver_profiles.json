@@ -400,6 +400,28 @@
         "usb_port",
         "uvc_backend"
       ]
+    },
+    "gemini_305": {
+      "model": "Gemini 305",
+      "launch_file": "rust-capture-service",
+      "capture_backend": "rust",
+      "parameters": [
+        "enable_color",
+        "enable_depth",
+        "color_format",
+        "depth_format",
+        "depth_registration",
+        "color_width",
+        "color_height",
+        "color_fps",
+        "depth_width",
+        "depth_height",
+        "depth_fps",
+        "color_qos",
+        "color_camera_info_qos",
+        "depth_qos",
+        "depth_camera_info_qos"
+      ]
     }
   }
 }

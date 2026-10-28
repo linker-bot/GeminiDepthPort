@@ -1,4 +1,5 @@
 """Bundle/lifecycle integration with a synthetic Docker facade, never real devices."""
+import legacy_support  # Enable the test-only Python behavior oracle.
 import copy
 import importlib.util
 import json
@@ -345,7 +346,7 @@ class OwnershipTests(unittest.TestCase):
         script=(BASE/'deploy.sh').read_text()
         self.assertNotIn('camera_head',script);self.assertNotIn('camera_wrist',script)
         self.assertNotIn('down --remove-orphans',script)
-        self.assertIn('cameractl.py stack-stop',script)
+        self.assertIn('geminidepthport stack-stop',script)
         self.assertIn('recording-guard.json',script)
 
 

@@ -1,4 +1,5 @@
 """Public patch tooling and synthetic memory/preview contracts; no camera fixtures."""
+import legacy_support  # Enable the test-only Python behavior oracle.
 import copy
 import difflib
 import hashlib

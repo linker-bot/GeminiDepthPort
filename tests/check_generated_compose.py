@@ -1,4 +1,5 @@
 """CI validates a generated three-camera bundle with Compose, without Docker daemon/device access."""
+import legacy_support  # Enable the test-only Python behavior oracle.
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory

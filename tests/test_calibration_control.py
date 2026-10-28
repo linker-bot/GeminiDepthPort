@@ -1,4 +1,5 @@
 """Control-plane capture uses only an existing ROS container and private evidence."""
+import legacy_support  # Enable the test-only Python behavior oracle.
 import json
 from pathlib import Path
 import sys
