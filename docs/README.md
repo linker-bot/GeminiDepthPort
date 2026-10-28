@@ -5,6 +5,8 @@
 
 ## 使用指南
 
+[公开接入示例](../examples/README.md)提供未绑定配置、受管接入步骤和独立硬件测试入口。
+
 - [部署与开机管理](guides/deployment.md)
 - [Web 配置、预览与确认](guides/web.md)
 - [配置字段与旧版迁移](guides/configuration.md)

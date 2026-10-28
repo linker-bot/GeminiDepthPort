@@ -48,6 +48,8 @@ sudo ./deploy.sh install
 
 ## 配置与运行资料
 
+从[公开接入示例](examples/README.md)选择官方三机或 Rust 单机草稿，先离线校验，再按真实设备完成预览确认。
+
 `inventory.json` 是部署配置入口，`inventory.v2.example.json` 是未绑定模板。
 实际设备绑定、标定和凭据只保存在受控部署目录。`state/`、`work/`、`.env`
 由 Git 忽略；不要提交已填写的真实 inventory。正式配置由管理器生成到

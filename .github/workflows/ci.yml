@@ -21,7 +21,7 @@ jobs:
           node-version: '22'
       - name: Install test dependencies
         run: python -m pip install -r requirements-test.txt
-      - name: Unit tests without camera hardware
+      - name: Unit tests and public example privacy, links and shell syntax
         run: python -m unittest discover -s tests -v
       - name: Python and JavaScript syntax
         run: |
@@ -59,10 +59,11 @@ jobs:
       - run: python -m pip install -r requirements-test.txt
       - name: Install management Rust toolchain
         run: rustup toolchain install 1.90.0 --profile minimal --component rustfmt,clippy
-      - name: Rust format, checks and contract tests
+      - name: Rust format, contracts and public example CLI validation
         run: |
           cargo +1.90.0 fmt -p geminidepthport --check
           cargo +1.90.0 clippy --locked -p geminidepthport --all-targets -- -D warnings
+          # Includes public_examples: real parser/CLI, no device access or runtime proof.
           cargo +1.90.0 test --locked -p geminidepthport
           cargo +1.90.0 build --locked -p geminidepthport
       - name: Rust CLI and real HTTP contracts, synthetic Docker only
