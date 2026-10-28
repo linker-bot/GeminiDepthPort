@@ -129,6 +129,8 @@ Node.js 仅用于开发时的 JavaScript 语法检查。Python 为旧实现对�
 - [消费、ROSbag2 与长期验收](docs/rust-service-acceptance.md)
 - [Rust 帧包与 ROS 发布实验](docs/rust-ros-output.md)
 - [同一 Pipeline 的 RGB-D、真实 TF 与配对实验](docs/rust-rgbd-tf-pairing.md)
+- [RGB-D 通用契约、质量监控与离线链路十批实施计划](docs/contracts/rgbd-data-chain-plan.md)
+- [离线深度校验、D2C 与 PNG/TAR 导出入口](crates/offline-depth/README.md)
 - [Rust 迁移路线](docs/ROADMAP.md)
 - [验证记录与真机验收](docs/VALIDATION.md)
 - [第三方许可与来源](THIRD_PARTY_NOTICES.md)

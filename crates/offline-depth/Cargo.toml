@@ -1,0 +1,18 @@
+[package]
+name = "offline-depth"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+[dependencies]
+capture-contract = { path = "../capture-contract" }
+frame-core = { path = "../frame-core" }
+d2c-core = { path = "../d2c-core" }
+depth-output = { path = "../depth-output" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+ring = "0.17"
+[dev-dependencies]
+tempfile = "3"
+png = "0.17"
+tar = "0.4"

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/capture-contract", "crates/quality-core", "crates/capture-observer", "crates/frame-core", "crates/orbbec-sys", "crates/orbbec-safe", "crates/capture-probe", "crates/ros-output"]
+members = ["crates/capture-contract", "crates/quality-core", "crates/capture-observer", "crates/frame-core", "crates/orbbec-sys", "crates/orbbec-safe", "crates/capture-probe", "crates/ros-output", "crates/d2c-core", "crates/depth-output", "crates/offline-depth"]
 resolver = "3"
 
 [package]
