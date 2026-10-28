@@ -30,6 +30,8 @@ fn execute() -> Result<RunReport> {
     let mut validate_only = false;
     let mut d2c = false;
     let mut normalize_mm = false;
+    let mut recording_v2 = false;
+    let mut preserve_counts = false;
     let mut seen = std::collections::BTreeSet::new();
     while let Some(arg) = args.next() {
         if !seen.insert(arg.clone()) {
@@ -73,11 +75,16 @@ fn execute() -> Result<RunReport> {
             "--validate-only" => validate_only = true,
             "--d2c" => d2c = true,
             "--normalize-mm" => normalize_mm = true,
+            "--recording-v2" => recording_v2 = true,
+            "--preserve-counts" => preserve_counts = true,
             _ => return Err(OfflineError::Invalid("UNKNOWN_ARGUMENT")),
         }
     }
     if !(1..=16).contains(&capacity) {
         return Err(OfflineError::Invalid("QUEUE_CAPACITY"));
+    }
+    if preserve_counts && (d2c || normalize_mm) {
+        return Err(OfflineError::Invalid("COUNTS_OPERATION_CONFLICT"));
     }
     if d2c && normalize_mm {
         return Err(OfflineError::Invalid("D2C_NORMALIZATION_ALREADY_EXPLICIT"));
@@ -86,12 +93,39 @@ fn execute() -> Result<RunReport> {
     if !input.is_absolute() {
         return Err(OfflineError::Invalid("ABSOLUTE_INPUT_REQUIRED"));
     }
-    let mut source = DirectoryFrameSource::open(&input, selected)?;
-    let operation = if d2c {
+    let operation = if preserve_counts {
+        Operation::PreserveCounts
+    } else if d2c {
         Operation::DepthToColor
     } else {
         Operation::Original { normalize_mm }
     };
+    if recording_v2 {
+        if selected.is_some() {
+            return Err(OfflineError::Invalid("V2_PAIR_SELECTION_UNSUPPORTED"));
+        }
+        let mut source = recording::RecordingDirectorySource::open(&input)?;
+        if validate_only {
+            if output.is_some() || name.is_some() {
+                return Err(OfflineError::Invalid("VALIDATE_OUTPUT_ARGUMENT"));
+            }
+            return recording::process(&mut source, None, operation);
+        }
+        let output = output.ok_or(OfflineError::Invalid("OUTPUT_REQUIRED"))?;
+        if !output.is_absolute() {
+            return Err(OfflineError::Invalid("ABSOLUTE_OUTPUT_REQUIRED"));
+        }
+        return recording::process(
+            &mut source,
+            Some((
+                &output,
+                &name.ok_or(OfflineError::Invalid("JOB_REQUIRED"))?,
+                mode,
+            )),
+            operation,
+        );
+    }
+    let mut source = DirectoryFrameSource::open(&input, selected)?;
     if validate_only {
         if output.is_some() || name.is_some() {
             return Err(OfflineError::Invalid("VALIDATE_OUTPUT_ARGUMENT"));

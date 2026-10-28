@@ -14,6 +14,9 @@ fn observed_pair_is_not_an_sdk_frameset_and_unknown_sdk_fields_stay_none() {
     let pair = &update.pairs[0];
     assert_eq!(pair.provenance, PairingProvenance::ObservedTimestamp);
     assert_eq!(pair.delta_ns, 5);
+    assert_eq!(pair.color.camera_info_observation_sequence, Some(1));
+    assert_eq!(pair.depth.camera_info_observation_sequence, Some(3));
+    assert_eq!(pair.color.metadata_observation_sequence, None);
     assert_eq!(pair.same_sdk_frameset, None);
     assert!(!pair.hardware_sync_verified);
     assert_eq!(pair.color.context.sequence, None);
@@ -323,4 +326,87 @@ fn pending_image_never_borrows_previous_camera_info_as_complete_contract_evidenc
         panic!()
     };
     assert!(!snapshot.continue_allowed);
+}
+#[test]
+fn explicit_lifecycle_interruption_is_bounded_terminal_and_does_not_fake_frame_or_device_facts() {
+    for reason in [
+        InterruptionReason::DriverExited,
+        InterruptionReason::ObserverInterrupted,
+        InterruptionReason::CoreUnavailable,
+    ] {
+        let mut observer = CaptureObserver::new(config()).unwrap();
+        observer.interrupt(at(1), reason).unwrap();
+        observer.interrupt(at(2), reason).unwrap();
+        observer.finalize().unwrap();
+        let request = QualityQueryRequest {
+            version: 1,
+            query: QualityQuery::Snapshot,
+        };
+        let response = observer.query(request).unwrap();
+        let QualityQueryResult::Snapshot { snapshot } = response.quality.result else {
+            panic!("snapshot required")
+        };
+        assert_eq!(snapshot.state, QualityState::Failed);
+        assert_eq!(snapshot.interruption_reason, Some(reason));
+        assert!(
+            snapshot
+                .streams
+                .values()
+                .all(|stream| stream.frame_count == 0)
+        );
+        assert_eq!(
+            snapshot
+                .finalized_sessions
+                .last()
+                .unwrap()
+                .interruption_reason,
+            Some(reason)
+        );
+        assert!(
+            !snapshot
+                .active_episodes
+                .iter()
+                .any(|episode| episode.violation == FrameViolation::DeviceDisconnected)
+        );
+        let response = observer
+            .query(QualityQueryRequest {
+                version: 1,
+                query: QualityQuery::Events {
+                    cursor: None,
+                    limit: config().quality.event_capacity,
+                },
+            })
+            .unwrap();
+        let QualityQueryResult::Events { page } = response.quality.result else {
+            panic!("events required")
+        };
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(
+            page.events[0].violation,
+            FrameViolation::ObserverInterrupted
+        );
+        assert_eq!(page.events[0].interruption_reason, Some(reason));
+        assert!(observer.interrupt(at(3), reason).is_err());
+    }
+    let mut normal = CaptureObserver::new(config()).unwrap();
+    normal.finalize().unwrap();
+    let response = normal
+        .query(QualityQueryRequest {
+            version: 1,
+            query: QualityQuery::Snapshot,
+        })
+        .unwrap();
+    let QualityQueryResult::Snapshot { snapshot } = response.quality.result else {
+        panic!("snapshot required")
+    };
+    assert_eq!(snapshot.state, QualityState::Normal);
+    assert_eq!(snapshot.interruption_reason, None);
+    assert_eq!(
+        snapshot
+            .finalized_sessions
+            .last()
+            .unwrap()
+            .interruption_reason,
+        None
+    );
 }

@@ -21,6 +21,7 @@ import threading
 import time
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
+from urllib.parse import urlencode
 
 REPO = Path(__file__).resolve().parents[2]
 PROJECT = 'orbbec-multicam'
@@ -79,6 +80,58 @@ def candidate(source, image, policy):
     return result
 
 
+def context_bindings(value, names, protected):
+    """Check facts returned by the real manager; never construct positive proof."""
+    require(value.get('version') == 1 and value.get('kind') == 'recording-context'
+            and value.get('backend') == 'rust' and value.get('physical_accuracy_verified') is False,
+            'CONTEXT_SCHEMA')
+    protection = value.get('protection', {})
+    require(protection.get('guard_version') == 2
+            and protection.get('strong_guarantee_available') is True
+            and protection.get('native_restart_gate') is True
+            and protection.get('session_bound') is protected
+            and protection.get('native_gate_ack_verified') is protected,
+            'CONTEXT_NATIVE_PROTECTION')
+    if protected:
+        require(protection.get('state') == 'active', 'CONTEXT_GUARD_NOT_ACTIVE')
+    cameras = value.get('cameras', [])
+    require(len(cameras) == len(names) and {c.get('camera_name') for c in cameras} == set(names),
+            'CONTEXT_CAMERA_SET')
+    bindings = {}
+    for camera in cameras:
+        snapshot = camera.get('snapshot', {})
+        content = snapshot.get('content', {})
+        binding = content.get('binding', {})
+        calibration = content.get('calibration', {})
+        require(camera.get('session_kind') == 'sdk-worker'
+                and snapshot.get('version') == 1
+                and re.fullmatch('[a-f0-9]{64}', snapshot.get('snapshot_id', '')) is not None
+                and binding.get('instance_id') == camera.get('instance_id')
+                and binding.get('session_id') == camera.get('session_id')
+                and binding.get('generation_id') == value.get('generation_id')
+                and calibration.get('source') == 'sdk-active-profiles'
+                and calibration.get('actual_runtime_observed') is True
+                and calibration.get('physical_accuracy_verified') is False
+                and calibration.get('source_session_id') == camera.get('session_id')
+                and calibration.get('source_instance_id') == camera.get('instance_id')
+                and re.fullmatch('[a-f0-9]{64}', content.get('configuration', {}).get('runtime_config_sha256', '')) is not None,
+                'CONTEXT_SNAPSHOT_BINDING')
+        bindings[camera['camera_name']] = {key: camera.get(key) for key in
+            ('container_id', 'instance_id', 'session_id', 'snapshot')}
+    return bindings
+
+
+def quality_binding(value, name, binding, generation, kind):
+    require(value.get('version') == 1 and value.get('kind') == 'quality-' + kind
+            and value.get('backend') == 'rust' and value.get('camera_name') == name
+            and value.get('session_kind') == 'sdk-worker' and value.get('worker_ready') is True
+            and value.get('instance_id') == binding['instance_id']
+            and value.get('session_id') == binding['session_id']
+            and value.get('snapshot_id') == binding['snapshot']['snapshot_id']
+            and value.get('generation_id') == generation, 'QUALITY_RUNTIME_BINDING')
+    return value.get('result', {})
+
+
 class Runner:
     def __init__(self, args):
         self.args = args
@@ -98,7 +151,7 @@ class Runner:
         result = subprocess.run([str(self.args.manager_binary), '--root', str(self.workspace), *arguments],
                                 input=credential, text=True, capture_output=True, timeout=timeout)
         # Guard credentials remain in memory/stdin only, never private logs either.
-        if credential is None and arguments != ('protect',):
+        if credential is None and (not arguments or arguments[0] != 'protect'):
             (self.logs / (stage + '.stdout')).write_text(result.stdout)
             (self.logs / (stage + '.stderr')).write_text(result.stderr)
         if expected_error:
@@ -176,6 +229,41 @@ class Runner:
         require(token is not None, 'PUBLIC_CSRF_TOKEN_MISSING')
         self.token = token.group(1).decode()
 
+    def verify_context(self, names, protected, previous=None):
+        value = self.cli('context-' + ('protected' if protected else 'unprotected'),
+                         'recording-context', '--require-strong')
+        bindings = context_bindings(value, names, protected)
+        require(previous is None or bindings == previous, 'CONTEXT_RUNTIME_CHANGED')
+        return value, bindings
+
+    def verify_quality(self, context, bindings):
+        for name, binding in bindings.items():
+            query = urlencode({'camera': name})
+            current = quality_binding(self.http('/api/quality/current?' + query), name, binding,
+                                      context['generation_id'], 'current')['quality']
+            require(current.get('session_id') == binding['session_id']
+                    and current.get('current_session_finalized') is False, 'QUALITY_CURRENT_INVALID')
+            page = quality_binding(self.http('/api/quality/events?' + query + '&limit=2'), name,
+                                   binding, context['generation_id'], 'events')['page']
+            require(page.get('origin_session_id') == current.get('origin_session_id')
+                    and isinstance(page.get('events'), list)
+                    and page.get('latest_sequence', -1) >= current.get('latest_event_sequence', 0),
+                    'QUALITY_EVENTS_INVALID')
+            cursor = page.get('next_cursor')
+            require(isinstance(cursor, dict), 'QUALITY_CURSOR_MISSING')
+            next_page = quality_binding(self.http('/api/quality/events?' + urlencode(
+                {'camera': name, 'limit': 2, 'cursor': json.dumps(cursor)})), name, binding,
+                context['generation_id'], 'events')['page']
+            require(next_page.get('origin_session_id') == cursor.get('origin_session_id')
+                    and all(event.get('sequence', -1) > cursor.get('after_sequence', -1)
+                            for event in next_page.get('events', [])), 'QUALITY_CURSOR_NOT_APPLIED')
+            summary = quality_binding(self.http('/api/quality/session-summary?' + query), name,
+                                      binding, context['generation_id'], 'session-summary')
+            # An active session must not manufacture a finalized summary.
+            require(summary.get('available') is False and summary.get('summary') is None
+                    and isinstance(summary.get('finalized_sessions'), list), 'QUALITY_ACTIVE_SUMMARY_INVALID')
+        self.completed.append('real-quality-current-events-summary-apis')
+
     def execute(self, data):
         require(os.name == 'posix' and Path('/proc').is_dir() and self.args.devices_released, 'EXPLICIT_TARGET_AND_DEVICE_RELEASE_REQUIRED')
         for root in (self.args.source_deployment_root or self.args.source_inventory.parent, self.workspace):
@@ -222,19 +310,38 @@ class Runner:
         calibration = self.cli('calibration-export', 'calibration-export')
         require(calibration.get('structural_validation') is True and calibration.get('physical_accuracy_verified') is False, 'CALIBRATION_EXPORT_FAILED')
         self.completed.append('published-calibration-export')
-        protected = self.cli('protect', 'protect')
+        names = [c['name'] for c in data['cameras'] if c.get('enabled') is True]
+        context, bindings = self.verify_context(names, False)
+        self.verify_quality(context, bindings)
+        protected = self.cli('protect', 'protect', '--require-strong')
         self.guard_token = protected.get('token')
         require(isinstance(self.guard_token, str) and self.guard_token, 'GUARD_CREDENTIAL_MISSING')
+        require(protected.get('runtime_session_bound') is True and protected.get('state') == 'active',
+                'NATIVE_GUARD_NOT_BOUND')
+        self.verify_context(names, True, bindings)
+        self.completed.append('native-gate-ack-and-snapshot-bound-context')
         self.cli('guard-blocks-down', 'down', expected_error='RECORDING_PROTECTED')
         first = next(c['name'] for c in data['cameras'] if c.get('enabled') is True)
         self.http('/api/preview/start', {'role': first}, expected_error='RECORDING_PROTECTED')
         self.cli('wrong-release', 'release-protection', credential='not-the-credential', expected_error='GUARD_CREDENTIAL')
+        self.verify_context(names, True, bindings)  # Wrong credential must preserve ACK/binding.
         require(self.cli('guard-preserves-health', 'check').get('ready') is True, 'GUARD_INTERRUPTED_CAPTURE')
         self.cli('release', 'release-protection', credential=self.guard_token)
         self.guard_token = None
+        self.verify_context(names, False, bindings)
         self.completed.append('recording-guard-interlock')
         require(self.cli('down', 'down').get('status') == 'stopped', 'FORMAL_STOP_FAILED')
         self.completed.append('formal-down')
+        for name,binding in bindings.items():
+            history=self.cli('historical-summary-'+name,'quality-session-summary',name,
+                '--generation',context['generation_id'],'--session',binding['session_id'])
+            require(history.get('live') is False and history.get('worker_ready') is False
+                and history.get('native_gate_ack_verified') is False and history.get('session_bound') is False
+                and history.get('complete') is True and history.get('state')=='finalized'
+                and history.get('snapshot_verified') is True
+                and history.get('snapshot_id')==binding['snapshot']['snapshot_id'],
+                'STOPPED_SESSION_SUMMARY_NOT_PERSISTED')
+        self.completed.append('normal-down-persistent-session-summary')
         self.cli('remove-test-instances', 'stack-stop', '--remove')
         self.claimed_project = False
 

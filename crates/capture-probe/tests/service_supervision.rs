@@ -71,7 +71,7 @@ fn fixture() -> Fixture {
     let bridge = root.join("mock-bridge.so");
     let mut sdk_source =
         fs::read_to_string(crate_root.join("../orbbec-safe/tests/mock_sdk.c")).unwrap();
-    sdk_source.insert_str(0,"#define _DEFAULT_SOURCE\n#include <unistd.h>\nstatic unsigned long long service_sequence;\n");
+    sdk_source.insert_str(0,"#define _DEFAULT_SOURCE\n#include <unistd.h>\n#include <signal.h>\nstatic unsigned long long service_sequence;\n");
     replace(
         &mut sdk_source,
         "if(ms==1)return NULL;return make(5);",
@@ -80,7 +80,7 @@ fn fixture() -> Fixture {
     replace(
         &mut sdk_source,
         "(void)d;(void)e;return make(3);",
-        "(void)d;(void)e;const char *delay=getenv(\"GDP_MOCK_OPEN_DELAY_MS\");if(delay)usleep((useconds_t)(strtoul(delay,NULL,10)*1000));return make(3);",
+        "(void)d;(void)e;const char *helper_path=getenv(\"GDP_MOCK_HELPER_PID\");if(helper_path){pid_t helper=fork();if(helper==0){signal(SIGTERM,SIG_IGN);signal(SIGINT,SIG_IGN);for(;;)pause();}if(helper>0){FILE *f=fopen(helper_path,\"w\");if(f){fprintf(f,\"%ld\",(long)helper);fclose(f);}}}const char *delay=getenv(\"GDP_MOCK_OPEN_DELAY_MS\");if(delay)usleep((useconds_t)(strtoul(delay,NULL,10)*1000));return make(3);",
     );
     replace(&mut sdk_source, "return 42;", "return service_sequence;");
     replace(
@@ -121,6 +121,13 @@ fn fixture() -> Fixture {
     replace(
         &mut bridge_source,
         "if(pair->pair_sequence==999){event(\"aux-publish-failed\");return 2;}",
+        "",
+    );
+    // Supervision exercises the healthy publication path. The shared bridge
+    // fixture's pair-2 evidence fault belongs to its dedicated bridge tests.
+    replace(
+        &mut bridge_source,
+        "if(p.last.pair_sequence==2){event(\"evidence-failed\");return 2;}",
         "",
     );
     let bridge_cpp = root.join("mock-bridge.cpp");
@@ -458,19 +465,79 @@ fn protected_worker_failure_cannot_reopen_sdk_until_persistent_gate_is_removed()
     let mut config: Value = serde_json::from_slice(&fs::read(&f.config).unwrap()).unwrap();
     config["service"]["recording_control_path"] = json!(path);
     config["service"]["generation"] = json!("d".repeat(32));
+    // Snapshot creation is opt-in. Use an explicit report-only policy because
+    // the native ABI mock has fixed historical timestamps, not a real clock.
+    config["quality_policy"] = json!({"version":1,"max_source_age_ns":500_000_000_u64,
+        "max_future_ns":100_000_000_u64,"max_pair_delta_us":20_000,
+        "min_valid_fraction":0.0,"max_zero_fraction":1.0,"action":"report-only"});
     fs::write(&f.config, config.to_string()).unwrap();
     let mut supervisor = launch(&f);
     let first = wait_status(&f, &mut supervisor, |v| v["state"] == "ready");
     let old_pid = first["pid"].as_u64().unwrap();
-    let request = json!({"version":1,"phase":"preparing","request_id":"a".repeat(32),"binding":{"instance_id":first["instance_id"],"session_id":first["session_id"],"generation_id":"d".repeat(32),"configuration_id":"c".repeat(64),"calibration_id":"e".repeat(64)},"snapshot_id":"f".repeat(64),"runtime_config_sha256":first["config_sha256"],"token_sha256":"0".repeat(64)});
-    fs::write(&path, request.to_string()).unwrap();
+    let snapshot_path = first["snapshot_path"]
+        .as_str()
+        .expect("ready gate fixture must publish an actual snapshot path");
+    let snapshot: capture_contract::snapshot::SnapshotEnvelope = serde_json::from_value(
+        capture_contract::parse_strict(&fs::read(snapshot_path).unwrap()).unwrap(),
+    )
+    .unwrap();
+    snapshot.verify(&snapshot.content.binding).unwrap();
+    snapshot.require_runtime().unwrap();
+    assert_eq!(first["snapshot_id"], snapshot.snapshot_id.as_str());
+    assert_eq!(
+        first["session_id"],
+        snapshot.content.binding.session_id.as_str()
+    );
+    assert_eq!(
+        first["instance_id"],
+        snapshot.content.binding.instance_id.as_str()
+    );
+    assert_eq!(
+        first["generation"],
+        snapshot.content.binding.generation_id.as_str()
+    );
+    assert_eq!(
+        snapshot.content.configuration["runtime_config_sha256"],
+        first["config_sha256"]
+    );
+    for role in ["color", "depth"] {
+        let model = snapshot
+            .content
+            .calibration
+            .models
+            .get(role)
+            .expect("actual mock SDK profile required");
+        assert_eq!((model.width, model.height), (2, 2));
+    }
+    let request = capture_contract::recording::GateRequest {
+        version: 1,
+        phase: capture_contract::recording::GatePhase::Preparing,
+        request_id: capture_contract::SessionId::parse("a".repeat(32)).unwrap(),
+        binding: snapshot.content.binding.clone(),
+        snapshot_id: snapshot.snapshot_id.clone(),
+        runtime_config_sha256: capture_contract::ConfigurationId::parse(
+            first["config_sha256"].as_str().unwrap(),
+        )
+        .unwrap(),
+        token_sha256: capture_contract::ConfigurationId::parse("0".repeat(64)).unwrap(),
+    };
+    fs::write(&path, serde_json::to_vec(&request).unwrap()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     while !gate.join("ack.json").exists() {
         assert!(Instant::now() < deadline);
         thread::sleep(Duration::from_millis(10));
     }
-    let ack: Value = serde_json::from_slice(&fs::read(gate.join("ack.json")).unwrap()).unwrap();
-    assert_eq!(ack["session_id"], first["session_id"]);
+    let ack: capture_contract::recording::GateAck = serde_json::from_value(
+        capture_contract::parse_strict(&fs::read(gate.join("ack.json")).unwrap()).unwrap(),
+    )
+    .unwrap();
+    request
+        .verify_ack(&ack, u32::try_from(old_pid).unwrap())
+        .unwrap();
+    assert_eq!(
+        ack.session_id.as_str(),
+        first["session_id"].as_str().unwrap()
+    );
     unsafe {
         assert_eq!(libc::kill(old_pid as i32, libc::SIGSTOP), 0);
     }
@@ -495,4 +562,122 @@ fn protected_worker_failure_cannot_reopen_sdk_until_persistent_gate_is_removed()
     });
     assert_eq!(second["restart_attempt"], 1);
     stop(&mut supervisor);
+}
+
+struct GroupRegressionGuard {
+    supervisor: Child,
+    helpers: Vec<std::os::fd::OwnedFd>,
+    unrelated: Child,
+}
+impl Drop for GroupRegressionGuard {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // pidfds retain identity even if an assertion fails after a PID exited.
+        // Never send a cleanup signal using a stale test PID/PGID.
+        for helper in &self.helpers {
+            unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    helper.as_raw_fd(),
+                    libc::SIGKILL,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                );
+            }
+        }
+        if self.supervisor.try_wait().ok().flatten().is_none() {
+            unsafe {
+                libc::kill(self.supervisor.id() as i32, libc::SIGTERM);
+            }
+            let started = Instant::now();
+            while self.supervisor.try_wait().ok().flatten().is_none()
+                && started.elapsed() < Duration::from_secs(4)
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if self.supervisor.try_wait().ok().flatten().is_none() {
+                let _ = self.supervisor.kill();
+                let _ = self.supervisor.wait();
+            }
+        }
+        if self.unrelated.try_wait().ok().flatten().is_none() {
+            let _ = self.unrelated.kill();
+            let _ = self.unrelated.wait();
+        }
+    }
+}
+fn helper_pidfd(pid: u64) -> std::os::fd::OwnedFd {
+    use std::os::fd::FromRawFd;
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+    assert!(
+        fd >= 0,
+        "Linux pidfd support is required for safe lifecycle fixture cleanup"
+    );
+    unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as i32) }
+}
+#[test]
+fn killed_worker_group_helpers_are_reaped_before_reopen_and_unrelated_groups_survive() {
+    use std::os::unix::process::CommandExt;
+    let f = fixture();
+    let original = fs::read(&f.config).unwrap();
+    let helper_file = f.root.join("helper.pid");
+    let unrelated = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let supervisor = Command::new(env!("CARGO_BIN_EXE_capture-service"))
+        .arg("--config")
+        .arg(&f.config)
+        .env("GEMINIDEPTHPORT_MOCK_EVENTS", &f.events)
+        .env("GDP_ROS_MOCK_EVENTS", &f.events)
+        .env("GDP_MOCK_HELPER_PID", &helper_file)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut processes = GroupRegressionGuard {
+        supervisor,
+        helpers: vec![],
+        unrelated,
+    };
+    let first = wait_status(&f, &mut processes.supervisor, |v| v["state"] == "ready");
+    let old_helper = fs::read_to_string(&helper_file)
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    processes.helpers.push(helper_pidfd(old_helper));
+    let old_worker = first["pid"].as_u64().unwrap();
+    assert_eq!(
+        unsafe { libc::getpgid(old_helper as i32) },
+        old_worker as i32
+    );
+    unsafe {
+        assert_eq!(libc::kill(old_worker as i32, libc::SIGKILL), 0);
+    }
+    let second = wait_status(&f, &mut processes.supervisor, |v| {
+        v["state"] == "ready" && v["session_id"] != first["session_id"]
+    });
+    assert!(
+        !alive(old_helper),
+        "native helper must be killed and reaped before a new SDK worker opens"
+    );
+    assert!(!alive(old_worker));
+    assert_eq!(second["restart_attempt"], 1);
+    assert!(
+        processes.unrelated.try_wait().unwrap().is_none(),
+        "cleanup must not target unrelated process groups"
+    );
+    let new_helper = fs::read_to_string(&helper_file)
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    processes.helpers.push(helper_pidfd(new_helper));
+    stop(&mut processes.supervisor);
+    assert!(
+        !alive(new_helper),
+        "graceful supervisor shutdown must also reap TERM-ignoring helpers"
+    );
+    assert!(processes.unrelated.try_wait().unwrap().is_none());
+    assert_eq!(fs::read(&f.config).unwrap(), original);
 }

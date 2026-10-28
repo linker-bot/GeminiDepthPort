@@ -55,7 +55,8 @@ fn private_read(path: &Path) -> Result<Vec<u8>> {
         m.is_file()
             && m.uid() == unsafe { libc::geteuid() }
             && m.mode() & 0o777 == 0o600
-            && m.len() <= 65536,
+            && m.len() <= 65536
+            && m.nlink() == 1,
         "RECORDING_CONTROL_INVALID",
         "Private regular control file required",
     )?;
@@ -247,6 +248,71 @@ pub fn release(ctl: &Controller, token: &str, mut record: Value) -> Result<()> {
     File::open(ctl.root.join("state"))?.sync_all()?;
     Ok(())
 }
+/// Read-only proof of an active gate, not merely a configured mount or a saved
+/// manager guard. Every current request and native ACK must still agree.
+pub(crate) struct ActiveBinding<'a> {
+    pub camera_name: &'a str,
+    pub binding: &'a capture_contract::snapshot::SnapshotBinding,
+    pub snapshot_id: &'a capture_contract::SnapshotId,
+    pub runtime_config_sha256: &'a ConfigurationId,
+    pub worker_pid: u32,
+}
+pub(crate) fn active_bindings_match(
+    ctl: &Controller,
+    generation: &str,
+    bindings: &[ActiveBinding<'_>],
+) -> bool {
+    (|| -> Result<bool> {
+        let record = capture_contract::parse_strict(&private_read(&guard(ctl))?)?;
+        if record["version"] != 2
+            || record["state"] != "active"
+            || record["generation"] != generation
+            || bindings.is_empty()
+        {
+            return Ok(false);
+        }
+        let credential = ConfigurationId::parse(text(&record["token_sha256"]))?;
+        let items = record["requests"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("GUARD_INVALID"))?;
+        if items.len() != bindings.len() {
+            return Ok(false);
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for item in items {
+            if !names.insert(text(&item["camera_name"])) {
+                return Ok(false);
+            }
+        }
+        for expected in bindings {
+            let item = items
+                .iter()
+                .find(|i| i["camera_name"] == expected.camera_name)
+                .ok_or_else(|| anyhow::anyhow!("GUARD_INVALID"))?;
+            let request = GateRequest::parse(&serde_json::to_vec(&item["request"])?)?;
+            if request.phase != GatePhase::Active
+                || request.binding != *expected.binding
+                || request.snapshot_id != *expected.snapshot_id
+                || request.runtime_config_sha256 != *expected.runtime_config_sha256
+                || request.token_sha256 != credential
+                || item["worker_pid"].as_u64() != Some(u64::from(expected.worker_pid))
+            {
+                return Ok(false);
+            }
+            let folder = directory(ctl, expected.camera_name)?;
+            let installed = GateRequest::parse(&private_read(&folder.join("control.json"))?)?;
+            if installed != request {
+                return Ok(false);
+            }
+            let ack: GateAck = serde_json::from_value(capture_contract::parse_strict(
+                &private_read(&folder.join("ack.json"))?,
+            )?)?;
+            request.verify_ack(&ack, expected.worker_pid)?;
+        }
+        Ok(true)
+    })()
+    .unwrap_or(false)
+}
 pub fn status(ctl: &Controller) -> Value {
     match fs::symlink_metadata(guard(ctl)) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -263,5 +329,90 @@ pub fn status(ctl: &Controller) -> Value {
                 json!({"version":1,"blocked":true,"state":"invalid","recovery_credential_available":receipt(ctl).is_file()})
             }
         },
+    }
+}
+#[cfg(test)]
+mod active_readback_tests {
+    use super::*;
+    use capture_contract::{
+        CalibrationId, GenerationId, InstanceId, SnapshotId, snapshot::SnapshotBinding,
+    };
+    fn request() -> GateRequest {
+        GateRequest {
+            version: 1,
+            phase: GatePhase::Active,
+            request_id: SessionId::parse("a".repeat(32)).unwrap(),
+            binding: SnapshotBinding {
+                instance_id: InstanceId::parse("b".repeat(64)).unwrap(),
+                session_id: SessionId::parse("c".repeat(32)).unwrap(),
+                generation_id: GenerationId::parse("d".repeat(32)).unwrap(),
+                configuration_id: ConfigurationId::parse("e".repeat(64)).unwrap(),
+                calibration_id: CalibrationId::parse("f".repeat(64)).unwrap(),
+            },
+            snapshot_id: SnapshotId::parse("0".repeat(64)).unwrap(),
+            runtime_config_sha256: ConfigurationId::parse("1".repeat(64)).unwrap(),
+            token_sha256: ConfigurationId::parse("2".repeat(64)).unwrap(),
+        }
+    }
+    #[test]
+    fn saved_active_guard_is_not_enough_without_actual_matching_control_and_ack() {
+        let root = tempfile::tempdir().unwrap();
+        let ctl = Controller::new(root.path()).unwrap();
+        crate::util::private_dir(&root.path().join("state/recording-gates/camera_a")).unwrap();
+        let folder = directory(&ctl, "camera_a").unwrap();
+        let request = request();
+        let record = json!({"version":2,"state":"active","generation":request.binding.generation_id,"token_sha256":request.token_sha256,"requests":[{"camera_name":"camera_a","worker_pid":42,"request":request}]});
+        atomic_json(&guard(&ctl), &record).unwrap();
+        let binding = ActiveBinding {
+            camera_name: "camera_a",
+            binding: &request.binding,
+            snapshot_id: &request.snapshot_id,
+            runtime_config_sha256: &request.runtime_config_sha256,
+            worker_pid: 42,
+        };
+        let expected = [binding];
+        let generation = request.binding.generation_id.as_str();
+        assert!(!active_bindings_match(&ctl, generation, &expected));
+        atomic_json(
+            &folder.join("control.json"),
+            &serde_json::to_value(&request).unwrap(),
+        )
+        .unwrap();
+        let ack = GateAck {
+            version: 1,
+            request_id: request.request_id.clone(),
+            request_sha256: request.digest().unwrap(),
+            worker_pid: 42,
+            supervisor_pid: 1,
+            session_id: request.binding.session_id.clone(),
+        };
+        atomic_json(
+            &folder.join("ack.json"),
+            &serde_json::to_value(&ack).unwrap(),
+        )
+        .unwrap();
+        assert!(active_bindings_match(&ctl, generation, &expected));
+        let mut wrong = ack.clone();
+        wrong.request_sha256 = ConfigurationId::parse("3".repeat(64)).unwrap();
+        atomic_json(
+            &folder.join("ack.json"),
+            &serde_json::to_value(wrong).unwrap(),
+        )
+        .unwrap();
+        assert!(!active_bindings_match(&ctl, generation, &expected));
+        atomic_json(
+            &folder.join("ack.json"),
+            &serde_json::to_value(&ack).unwrap(),
+        )
+        .unwrap();
+        let mut wrong_record = record.clone();
+        wrong_record["requests"][0]["request"]["binding"]["calibration_id"] = json!("3".repeat(64));
+        atomic_json(&guard(&ctl), &wrong_record).unwrap();
+        assert!(!active_bindings_match(&ctl, generation, &expected));
+        atomic_json(&guard(&ctl), &record).unwrap();
+        fs::remove_file(folder.join("control.json")).unwrap();
+        assert!(!active_bindings_match(&ctl, generation, &expected));
+        assert_eq!(status(&ctl)["blocked"], true);
+        assert!(guard(&ctl).exists());
     }
 }

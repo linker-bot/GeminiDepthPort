@@ -19,6 +19,21 @@ pub struct Witness {
     sdk_snapshot_id: SnapshotId,
     sdk_snapshot_path: String,
 }
+impl Witness {
+    pub fn snapshot_id(&self) -> &SnapshotId {
+        &self.sdk_snapshot_id
+    }
+}
+fn source_identity_matches(status: &Value, official: bool) -> bool {
+    status["kind"]
+        == if official {
+            "official-observer-status"
+        } else {
+            "capture-service-status"
+        }
+        && (!official
+            || (status["session_kind"] == "observer" && status["native_session_verified"] == false))
+}
 fn sdk_reference(status: &Value) -> Result<(SnapshotId, String)> {
     let id = SnapshotId::parse(
         status["snapshot_id"]
@@ -39,6 +54,24 @@ pub fn live_witness(
     generation: &Value,
     camera: &Value,
 ) -> Result<Witness> {
+    witness(ctl, d, generation, camera, true)
+}
+/// Read terminal/degraded quality evidence without pretending the worker is live.
+pub fn status_witness(
+    ctl: &Controller,
+    d: &Value,
+    generation: &Value,
+    camera: &Value,
+) -> Result<Witness> {
+    witness(ctl, d, generation, camera, false)
+}
+fn witness(
+    ctl: &Controller,
+    d: &Value,
+    generation: &Value,
+    camera: &Value,
+    require_ready: bool,
+) -> Result<Witness> {
     let name = text(&camera["name"]);
     let container = ctl
         .existing(generation)?
@@ -46,36 +79,83 @@ pub fn live_witness(
         .find(|v| v["Config"]["Labels"]["orbbec.camera"] == name)
         .ok_or_else(|| anyhow::anyhow!("SNAPSHOT_INSTANCE_MISSING"))?;
     let container_id = InstanceId::parse(text(&container["Id"]))?;
-    let raw=ctl.run(&["docker","exec",container_id.as_str(),"python3","-c","import json,os;from pathlib import Path;v=json.loads(Path('/tmp/capture/status.json').read_text());os.kill(v['pid'],0);print(json.dumps(v))"])?;
+    let official = crate::capture_backend::selected(d) != "rust";
+    require(
+        !official || generation["observer_backend"] == "ros-observed-v1",
+        "OFFICIAL_OBSERVER_UNAVAILABLE",
+        "Regenerate and start an observer-enabled official image",
+    )?;
+    let status_path = if official {
+        "/tmp/capture-observer/status.json"
+    } else {
+        "/tmp/capture/status.json"
+    };
+    let code = "import json,os,sys;from pathlib import Path;v=json.loads(Path(sys.argv[1]).read_text());[(os.kill(v[k],0)) for k in ['pid','driver_pid'] if sys.argv[2]=='1' and k in v];print(json.dumps(v))";
+    let raw = ctl.run(&[
+        "docker",
+        "exec",
+        container_id.as_str(),
+        "python3",
+        "-c",
+        code,
+        status_path,
+        if require_ready { "1" } else { "0" },
+    ])?;
     let status = capture_contract::parse_strict(raw.as_bytes())?;
     let instance_id = InstanceId::parse(
         status["instance_id"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("SNAPSHOT_NATIVE_INSTANCE_REQUIRED"))?,
     )?;
-    let (sdk_snapshot_id, sdk_snapshot_path) = sdk_reference(&status)?;
+    let (sdk_snapshot_id, sdk_snapshot_path) = if official {
+        let id = SnapshotId::parse(text(&status["snapshot_id"]))?;
+        let path = format!("/tmp/capture-observer/snapshots/{id}.json");
+        require(
+            status["snapshot_path"].as_str() == Some(path.as_str()),
+            "SNAPSHOT_OBSERVER_PATH_INVALID",
+            "Observer snapshot path differs",
+        )?;
+        (id, path)
+    } else {
+        sdk_reference(&status)?
+    };
     let runtime_config_sha256 =
         ConfigurationId::parse(file_hash(&generation_config(ctl, generation, name))?)?;
     let age = now() * 1000. - status["updated_unix_ms"].as_f64().unwrap_or(0.);
-    require(
-        status["kind"] == "capture-service-status"
-            && status["version"] == 1
-            && status["ready"] == true
-            && status["state"] == "ready"
-            && status["generation"] == generation["generation"]
-            && status["config_sha256"].as_str() == Some(runtime_config_sha256.as_str())
-            && age >= 0.
-            && age
-                <= d["rust_capture"]["service"]["heartbeat_timeout_ms"]
+    let ready = status["ready"] == true
+        && status["state"] == "ready"
+        && age
+            <= if official {
+                10_000.
+            } else {
+                d["rust_capture"]["service"]["heartbeat_timeout_ms"]
                     .as_f64()
                     .unwrap_or(0.)
-            && status["last_pair_age_ms"].as_u64().is_some_and(|v| {
+            }
+        && if official {
+            status["session_kind"] == "observer"
+                && status["native_session_verified"] == false
+                && ["color", "depth"].iter().all(|r| {
+                    status["received_counts"][*r]
+                        .as_u64()
+                        .is_some_and(|v| v >= 3)
+                })
+        } else {
+            status["last_pair_age_ms"].as_u64().is_some_and(|v| {
                 v <= d["rust_capture"]["service"]["idle_timeout_ms"]
                     .as_u64()
                     .unwrap_or(0)
-            }),
+            })
+        };
+    require(
+        source_identity_matches(&status, official)
+            && status["version"] == 1
+            && status["generation"] == generation["generation"]
+            && status["config_sha256"].as_str() == Some(runtime_config_sha256.as_str())
+            && age >= 0.
+            && (!require_ready || ready),
         "SNAPSHOT_SESSION_NOT_READY",
-        "Actual session must be live and fresh",
+        "Capture identity or readiness does not match",
     )?;
     let worker_pid = status["pid"]
         .as_u64()
@@ -87,7 +167,12 @@ pub fn live_witness(
         service: format!("camera_{name}"),
         instance_id,
         container_id: container_id.to_string(),
-        instance_source: "supervisor-status".into(),
+        instance_source: if official {
+            "observer-supervisor-status"
+        } else {
+            "supervisor-status"
+        }
+        .into(),
         session_id: SessionId::parse(text(&status["session_id"]))?,
         worker_pid,
         runtime_config_sha256,
@@ -102,7 +187,11 @@ fn generation_config(ctl: &Controller, generation: &Value, name: &str) -> PathBu
         .join(text(&generation["generation"]))
         .join("config")
         .join(name)
-        .join("capture.json")
+        .join(if generation["capture_backend"] == "rust" {
+            "capture.json"
+        } else {
+            "observer-policy.json"
+        })
 }
 pub fn same_session(a: &Witness, b: &Witness) -> bool {
     a.camera_name == b.camera_name
@@ -156,7 +245,12 @@ fn validate_sdk_snapshot(
         "SDK snapshot differs from the current native session or config",
     )?;
     require(
-        envelope.content.calibration.source == CalibrationSource::SdkActiveProfiles,
+        envelope.content.calibration.source
+            == if witness.instance_source == "observer-supervisor-status" {
+                CalibrationSource::RosCameraInfoTf
+            } else {
+                CalibrationSource::SdkActiveProfiles
+            },
         "SNAPSHOT_SDK_SOURCE_REQUIRED",
         "Rust capture requires actual active-profile SDK calibration",
     )?;
@@ -201,11 +295,6 @@ fn validate_sdk_snapshot(
     Ok(envelope)
 }
 pub fn acquire(ctl: &Controller, d: &Value, generation: &Value) -> Result<Vec<Witness>> {
-    require(
-        crate::capture_backend::selected(d) == "rust",
-        "SNAPSHOT_BACKEND_UNSUPPORTED",
-        "Use the existing observed calibration export for the official backend",
-    )?;
     let cameras = config::active(d);
     let mut witnesses: Vec<_> = cameras
         .iter()
@@ -221,7 +310,11 @@ pub fn acquire(ctl: &Controller, d: &Value, generation: &Value) -> Result<Vec<Wi
                 &witness.container_id,
                 "python3",
                 "-c",
-                PRIVATE_SNAPSHOT_READER,
+                &if witness.instance_source == "observer-supervisor-status" {
+                    PRIVATE_SNAPSHOT_READER.replace("/tmp/capture", "/tmp/capture-observer")
+                } else {
+                    PRIVATE_SNAPSHOT_READER.into()
+                },
                 witness.sdk_snapshot_id.as_str(),
             ])
             .map_err(|_| anyhow::anyhow!("SNAPSHOT_SDK_PRIVATE_READ_FAILED"))?;
@@ -351,6 +444,18 @@ mod tests {
             json!({"generation":generation}),
             json!({"frame_prefix":"camera","parameters":{"color_width":640,"color_height":480,"depth_width":640,"depth_height":480}}),
         )
+    }
+    #[test]
+    fn official_terminal_source_cannot_be_misrepresented_as_sdk_session() {
+        for ready in [false, true] {
+            let mut status = json!({"kind":"official-observer-status","session_kind":"observer","native_session_verified":false,"ready":ready});
+            assert!(source_identity_matches(&status, true));
+            status["session_kind"] = "sdk-worker".into();
+            assert!(!source_identity_matches(&status, true));
+            status["session_kind"] = "observer".into();
+            status["native_session_verified"] = true.into();
+            assert!(!source_identity_matches(&status, true));
+        }
     }
     #[test]
     fn preserves_the_native_snapshot_id_and_rejects_all_identity_drift() {

@@ -88,6 +88,13 @@ fn v2(d: &Value, draft: bool) -> Result<()> {
     root.as_object_mut().unwrap().remove("communication");
     root.as_object_mut().unwrap().remove("capture_backend");
     root.as_object_mut().unwrap().remove("rust_capture");
+    root.as_object_mut().unwrap().remove("usbfs_minimum_mb");
+    require(
+        d.get("usbfs_minimum_mb")
+            .is_none_or(|v| v.as_u64().is_some_and(|n| (1..=65536).contains(&n))),
+        "USBFS_POLICY",
+        "Explicit USBFS minimum must be 1..65536 MiB",
+    )?;
     require(
         fields(
             &root,

@@ -26,7 +26,7 @@ def camera_info_record(msg):
             'roi': {key: getattr(msg.roi, key) for key in ('x_offset', 'y_offset', 'height', 'width')}}
 
 
-def collect(request, timeout_seconds=15):
+def collect(request, timeout_seconds=15, *, manage_signals=True, stop_requested=None):
     if not math.isfinite(timeout_seconds) or not 1 <= timeout_seconds <= 120:
         raise ValueError('Invalid calibration collection timeout')
     # ROS is optional for offline contract tests and management-only installations.
@@ -38,7 +38,11 @@ def collect(request, timeout_seconds=15):
     from tf2_msgs.msg import TFMessage
     result = {'source': 'ros-camera-info-tf', 'request_sha256': _digest(request),
               'cameras': {c['name']: {} for c in request['cameras']}}
-    rclpy.init()
+    if manage_signals:
+        rclpy.init()
+    else:
+        from rclpy.signals import SignalHandlerOptions
+        rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = rclpy.create_node('calibration_reader_' + uuid.uuid4().hex[:10])
     buffer = Buffer()
     # D2C is a static factory transform. Never silently use moving robot TF.
@@ -57,6 +61,8 @@ def collect(request, timeout_seconds=15):
                 subscriptions.append(node.create_subscription(CameraInfo, expected['topic'], callback, qos_profile_sensor_data))
         end = time.monotonic() + timeout_seconds
         while time.monotonic() < end:
+            if stop_requested is not None and stop_requested():
+                raise ValueError('Calibration collection canceled')
             rclpy.spin_once(node, timeout_sec=0.1)
             complete = True
             for camera in request['cameras']:

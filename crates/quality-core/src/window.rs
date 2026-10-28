@@ -62,6 +62,14 @@ impl<T> RollingWindow<T> {
         self.entries.push_back((at.offset_ns, value));
         Ok(result)
     }
+    /// Updates the latest retained receipt without adding a frame or moving the
+    /// window clock. Used for a later pixel check of that exact receipt.
+    pub(crate) fn latest_mut(&mut self, receipt_ns: u64) -> Result<&mut T, &'static str> {
+        match self.entries.back_mut() {
+            Some((ns, value)) if *ns == receipt_ns => Ok(value),
+            _ => Err("RECEIPT_NOT_RETAINED"),
+        }
+    }
     pub fn iter(&self) -> impl Iterator<Item = &(u64, T)> {
         self.entries.iter()
     }

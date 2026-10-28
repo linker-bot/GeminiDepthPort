@@ -239,6 +239,11 @@ pub struct ObservedFrame {
     pub mapped_unix_ns: u64,
     pub metadata_provenance: MetadataProvenance,
     pub reported_source_session: Option<SessionId>,
+    /// Exact retained input components selected by the Rust matcher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_info_observation_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_observation_sequence: Option<u64>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -270,6 +275,9 @@ pub struct AssociationStats {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssociationUpdate {
+    /// Input receipt token, including rejected inputs; never an SDK sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_observation_sequence: Option<u64>,
     pub version: u32,
     pub watermark_unix_ns: Option<u64>,
     pub pairs: Vec<ObservedAssociation>,
@@ -280,6 +288,7 @@ impl AssociationUpdate {
         Self {
             version: 1,
             watermark_unix_ns: watermark,
+            input_observation_sequence: None,
             pairs: vec![],
             rejections: vec![],
         }
@@ -481,6 +490,7 @@ impl CaptureObserver {
         let id = self.next_id()?;
         self.stats.images += 1;
         let mut update = AssociationUpdate::new(self.watermark);
+        update.input_observation_sequence = Some(id);
         let valid = self.image_valid(role, &image);
         let mapped = self.mapping(role, image.stamp);
         let mut context = self.config.streams[&role].context.clone();
@@ -598,6 +608,7 @@ impl CaptureObserver {
         let id = self.next_id()?;
         self.stats.camera_infos += 1;
         let mut update = AssociationUpdate::new(self.watermark);
+        update.input_observation_sequence = Some(id);
         let valid = self.info_valid(role, &info);
         if !valid {
             self.reject(
@@ -670,6 +681,7 @@ impl CaptureObserver {
         let id = self.next_id()?;
         self.stats.metadata += 1;
         let mut update = AssociationUpdate::new(self.watermark);
+        update.input_observation_sequence = Some(id);
         let parsed = (|| -> QualityResult<ReportedMetadata> {
             if input.data.len() > 4096 {
                 return Err("METADATA_INVALID");
@@ -915,6 +927,7 @@ impl CaptureObserver {
             } else {
                 None
             };
+            let info_id = ids.iter().find(|v| v.kind == 1).map(|v| v.id);
             let image = ids
                 .iter()
                 .find(|v| v.kind == 0)
@@ -925,9 +938,9 @@ impl CaptureObserver {
                 .find(|v| v.kind == 2)
                 .and_then(|id| queues.metadata.iter().find(|item| item.id == id.id))
                 .cloned();
-            plans.push((ids, image, meta, reason));
+            plans.push((ids, image, meta, info_id, reason));
         }
-        for (ids, image, metadata, reason) in plans {
+        for (ids, image, metadata, info_id, reason) in plans {
             let set = ids.iter().map(|v| v.id).collect::<BTreeSet<_>>();
             let queues = self.queues.get_mut(&role).unwrap();
             queues.images.retain(|v| !set.contains(&v.id));
@@ -959,6 +972,8 @@ impl CaptureObserver {
             }
             let frame = ObservedFrame {
                 observation_sequence: image.id,
+                camera_info_observation_sequence: info_id,
+                metadata_observation_sequence: metadata.as_ref().map(|meta| meta.id),
                 context,
                 observed_header_ns: image.stamp,
                 mapped_unix_ns: image.mapped,
@@ -1111,6 +1126,14 @@ impl CaptureObserver {
             association: self.stats.clone(),
             watermark_unix_ns: self.watermark,
         })
+    }
+    pub fn interrupt(
+        &mut self,
+        at: MonoTime,
+        reason: quality_core::InterruptionReason,
+    ) -> QualityResult<()> {
+        self.time(&at)?;
+        self.quality.interrupt(at, reason)
     }
     pub fn finalize(&mut self) -> QualityResult<AssociationUpdate> {
         if self.finalized {

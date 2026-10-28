@@ -73,6 +73,7 @@ impl GateRequest {
                 && status["pid"].as_u64() == Some(u64::from(worker_pid))
                 && status["session_id"].as_str() == Some(self.binding.session_id.as_str())
                 && status["instance_id"].as_str() == Some(self.binding.instance_id.as_str())
+                && status["snapshot_id"].as_str() == Some(self.snapshot_id.as_str())
                 && status["generation"].as_str() == Some(self.binding.generation_id.as_str())
                 && status["config_sha256"].as_str() == Some(self.runtime_config_sha256.as_str())
                 && config_sha == self.runtime_config_sha256.as_str(),
@@ -123,9 +124,18 @@ mod tests {
             runtime_config_sha256: id.clone(),
             token_sha256: id.clone(),
         };
-        let mut status = serde_json::json!({"version":1,"kind":"capture-service-status","ready":true,"state":"ready","pid":42,"session_id":s,"instance_id":request.binding.instance_id,"generation":request.binding.generation_id,"config_sha256":id});
+        let mut status = serde_json::json!({"version":1,"kind":"capture-service-status","ready":true,"state":"ready","pid":42,"session_id":s,"instance_id":request.binding.instance_id,"generation":request.binding.generation_id,"config_sha256":id,"snapshot_id":request.snapshot_id});
         let ack = request.acknowledge(&status, 42, 1, id.as_str()).unwrap();
         request.verify_ack(&ack, 42).unwrap();
+        // A live session may have multiple different representation snapshots;
+        // only the worker's current capture snapshot may authorize this gate.
+        let original_snapshot = request.snapshot_id.clone();
+        request.snapshot_id = SnapshotId::parse("0".repeat(64)).unwrap();
+        assert!(request.acknowledge(&status, 42, 1, id.as_str()).is_err());
+        request.snapshot_id = original_snapshot;
+        status.as_object_mut().unwrap().remove("snapshot_id");
+        assert!(request.acknowledge(&status, 42, 1, id.as_str()).is_err());
+        status["snapshot_id"] = serde_json::json!(request.snapshot_id);
         request.phase = GatePhase::Active;
         assert!(request.verify_ack(&ack, 42).is_err());
         request.phase = GatePhase::Preparing;

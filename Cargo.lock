@@ -70,6 +70,7 @@ dependencies = [
  "capture-contract",
  "frame-core",
  "libc",
+ "offline-depth",
  "orbbec-safe",
  "quality-core",
  "ring",
@@ -111,6 +112,10 @@ dependencies = [
 [[package]]
 name = "d2c-core"
 version = "0.1.0"
+dependencies = [
+ "capture-contract",
+ "serde_json",
+]
 
 [[package]]
 name = "depth-output"
@@ -213,7 +218,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "capture-contract",
+ "capture-observer",
  "libc",
+ "quality-core",
  "regex",
  "ring",
  "serde_json",
@@ -414,10 +421,12 @@ name = "offline-depth"
 version = "0.1.0"
 dependencies = [
  "capture-contract",
+ "capture-observer",
  "d2c-core",
  "depth-output",
  "frame-core",
  "png",
+ "quality-core",
  "ring",
  "serde",
  "serde_json",

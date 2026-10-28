@@ -18,8 +18,12 @@ pub enum FrameViolation {
     SessionChanged,
     PublishPartialFailure,
     TimeMappingInvalid,
+    /// Explicit observer lifecycle fact, not a configurable frame rule.
+    ObserverInterrupted,
 }
 impl FrameViolation {
+    // Existing configurable rules stay compatible; lifecycle commands have no
+    // synthetic threshold/recovery rule.
     pub const ALL: [Self; 9] = [
         Self::StreamStale,
         Self::TimestampRegression,
@@ -55,6 +59,7 @@ pub enum Condition {
 )]
 pub enum Scope {
     Group,
+    Recorder,
     Stream(String),
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,9 +133,18 @@ pub enum EventTransition {
     Opened,
     Recovered,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InterruptionReason {
+    DriverExited,
+    ObserverInterrupted,
+    CoreUnavailable,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QualityEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interruption_reason: Option<InterruptionReason>,
     pub version: u32,
     pub sequence: u64,
     /// The opening event sequence identifies this episode within this feed.
@@ -185,6 +199,8 @@ pub struct EventPage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionSummary {
+    #[serde(default)]
+    pub interruption_reason: Option<InterruptionReason>,
     pub version: u32,
     pub session_id: SessionId,
     pub finalized: bool,
@@ -195,6 +211,8 @@ pub struct SessionSummary {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamQuality {
+    #[serde(default)]
+    pub window_metrics: crate::StreamWindowMetrics,
     pub frame_count: u64,
     pub recent_frames: usize,
     pub recent_checks_passed_fraction: Option<f64>,
@@ -203,6 +221,12 @@ pub struct StreamQuality {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QualitySnapshot {
+    #[serde(default)]
+    pub interruption_reason: Option<InterruptionReason>,
+    #[serde(default)]
+    pub pair_delta_us: Option<crate::ScalarSummary>,
+    #[serde(default)]
+    pub diagnostics: crate::DiagnosticSnapshot,
     pub version: u32,
     pub origin_session_id: SessionId,
     pub session_id: SessionId,
@@ -251,6 +275,8 @@ struct Streak {
 }
 struct StreamState {
     window: RollingWindow<bool>,
+    metrics: RollingWindow<crate::metrics::MetricSample>,
+    latest_context: Option<FrameContext>,
     frames: u64,
     last_received: Option<u64>,
     source_last: BTreeMap<u8, u64>,
@@ -277,6 +303,10 @@ pub struct QualityEngine {
     summaries: VecDeque<SessionSummary>,
     summaries_evicted: u64,
     finalized: bool,
+    interruption_reason: Option<InterruptionReason>,
+    pair_delta: RollingWindow<u64>,
+    diagnostic_window: RollingWindow<crate::DiagnosticKind>,
+    diagnostic_counts: BTreeMap<crate::DiagnosticKind, u64>,
 }
 impl QualityEngine {
     pub fn new(
@@ -296,7 +326,20 @@ impl QualityEngine {
         for name in streams {
             states.insert(name, Self::new_stream(&policy, &session)?);
         }
+        let pair_delta = RollingWindow::new(
+            session.clone(),
+            policy.window_capacity,
+            policy.window_horizon_ns,
+        )?;
+        let diagnostic_window = RollingWindow::new(
+            session.clone(),
+            policy.window_capacity,
+            policy.window_horizon_ns,
+        )?;
         Ok(Self {
+            pair_delta,
+            diagnostic_window,
+            diagnostic_counts: BTreeMap::new(),
             policy,
             origin_session: session.clone(),
             current_session: session.clone(),
@@ -310,6 +353,7 @@ impl QualityEngine {
             summaries: VecDeque::new(),
             summaries_evicted: 0,
             finalized: false,
+            interruption_reason: None,
         })
     }
     fn new_stream(
@@ -317,6 +361,12 @@ impl QualityEngine {
         session: &SessionId,
     ) -> QualityResult<StreamState> {
         Ok(StreamState {
+            metrics: RollingWindow::new(
+                session.clone(),
+                policy.window_capacity,
+                policy.window_horizon_ns,
+            )?,
+            latest_context: None,
             window: RollingWindow::new(
                 session.clone(),
                 policy.window_capacity,
@@ -375,6 +425,9 @@ impl QualityEngine {
         condition: Condition,
     ) -> QualityResult<()> {
         self.check_time(&at)?;
+        if violation == FrameViolation::ObserverInterrupted {
+            return Err("LIFECYCLE_COMMAND_REQUIRED");
+        }
         self.check_scope(&scope)?;
         if self.event_sequence == u64::MAX {
             return Err("EVENT_SEQUENCE_EXHAUSTED");
@@ -417,6 +470,7 @@ impl QualityEngine {
                         recovery_observations: 0,
                     };
                     let event = QualityEvent {
+                        interruption_reason: None,
                         version: QUALITY_VERSION,
                         sequence: 0,
                         episode_sequence: sequence,
@@ -443,6 +497,7 @@ impl QualityEngine {
                         let recovery_observations = streak.good;
                         let active = self.active.remove(&key).expect("active episode exists");
                         self.emit(QualityEvent {
+                            interruption_reason: None,
                             version: QUALITY_VERSION,
                             sequence: 0,
                             episode_sequence: active.episode_sequence,
@@ -463,7 +518,7 @@ impl QualityEngine {
         Ok(())
     }
     pub fn record_frame(&mut self, frame: FrameObservation) -> QualityResult<()> {
-        self.record_frame_evidence(frame, None)
+        self.record_frame_evidence(frame, None, false)
     }
     /// Decoder/association boundaries can explicitly mark a valid layout's
     /// overall contract Unknown while required CameraInfo is still pending.
@@ -473,12 +528,18 @@ impl QualityEngine {
         frame: FrameObservation,
         evidence: Condition,
     ) -> QualityResult<()> {
-        self.record_frame_evidence(frame, Some(evidence))
+        self.record_frame_evidence(frame, Some(evidence), false)
+    }
+    /// A receipt is counted once. A later exact-context pixel observation supplies
+    /// the contract verdict, without resetting the pixel violation hysteresis.
+    pub fn record_frame_deferred_pixels(&mut self, frame: FrameObservation) -> QualityResult<()> {
+        self.record_frame_evidence(frame, None, true)
     }
     fn record_frame_evidence(
         &mut self,
         frame: FrameObservation,
         evidence: Option<Condition>,
+        deferred_pixels: bool,
     ) -> QualityResult<()> {
         frame
             .context
@@ -540,7 +601,7 @@ impl QualityEngine {
         let regression = frame
             .source
             .map(|stamp| {
-                if !source_bound {
+                if !source_bound || !bound {
                     return Condition::Unknown;
                 }
                 let key = stamp.clock.key();
@@ -563,7 +624,7 @@ impl QualityEngine {
                 condition
             })
             .unwrap_or(Condition::Unknown);
-        let mapping = frame.source.map(|source| {
+        let mapping = frame.source.filter(|_| bound).map(|source| {
             if !source_bound {
                 return Err(crate::MappingError::ClockMismatch);
             }
@@ -579,24 +640,49 @@ impl QualityEngine {
             .checked_add(1)
             .ok_or("OBSERVATION_COUNT_EXHAUSTED")?;
         state.last_received = Some(at.offset_ns);
-        state.window.push(
+        let base_passed = contract_evidence == Condition::Healthy
+            && regression != Condition::Violated
+            && mapping.is_some_and(|v| v.is_ok());
+        let age_ns = frame
+            .source
+            .and_then(|source| crate::map_source_time(source, frame.mapper).ok())
+            .zip(frame.received_unix_ns)
+            .filter(|_| source_bound && bound)
+            .map(|(source, received)| {
+                if received >= source {
+                    (received - source) as f64
+                } else {
+                    -((source - received) as f64)
+                }
+            });
+        state.metrics.push(
             &at,
-            contract_evidence == Condition::Healthy
-                && regression != Condition::Violated
-                && mapping.is_some_and(|v| v.is_ok()),
+            crate::metrics::MetricSample {
+                age_ns,
+                pixels: None,
+                base_passed,
+                contract_valid,
+            },
         )?;
+        state.latest_context = Some(frame.context.clone());
+        state.window.push(&at, base_passed && !deferred_pixels)?;
+        if !bound {
+            self.record_diagnostic(at.clone(), crate::DiagnosticKind::BindingChanged)?;
+        }
         self.evaluate(
             at.clone(),
             scope.clone(),
             FrameViolation::StreamStale,
             Condition::Healthy,
         )?;
-        self.evaluate(
-            at.clone(),
-            scope.clone(),
-            FrameViolation::FrameContractInvalid,
-            contract_evidence,
-        )?;
+        if !deferred_pixels || !contract_valid {
+            self.evaluate(
+                at.clone(),
+                scope.clone(),
+                FrameViolation::FrameContractInvalid,
+                contract_evidence,
+            )?;
+        }
         self.evaluate(
             at.clone(),
             scope.clone(),
@@ -622,6 +708,7 @@ impl QualityEngine {
         for name in names {
             let stream = self.streams.get_mut(&name).expect("registered");
             stream.window.tick(&at)?;
+            stream.metrics.tick(&at)?;
             let stale =
                 at.offset_ns - stream.last_received.unwrap_or(0) >= self.policy.stale_after_ns;
             if stale {
@@ -633,10 +720,76 @@ impl QualityEngine {
                 )?;
             }
         }
+        self.pair_delta.tick(&at)?;
+        self.diagnostic_window.tick(&at)?;
+        self.last_ns = at.offset_ns;
+        Ok(())
+    }
+    /// Fixed enum keys keep classification counters bounded. This records facts
+    /// only; it never decides an episode from the configured action.
+    pub fn record_diagnostic(
+        &mut self,
+        at: MonoTime,
+        kind: crate::DiagnosticKind,
+    ) -> QualityResult<()> {
+        self.check_time(&at)?;
+        self.diagnostic_window.push(&at, kind)?;
+        let count = self.diagnostic_counts.entry(kind).or_default();
+        *count = count.checked_add(1).ok_or("OBSERVATION_COUNT_EXHAUSTED")?;
+        self.last_ns = at.offset_ns;
+        Ok(())
+    }
+    pub fn record_pixel_metrics(
+        &mut self,
+        context: &FrameContext,
+        pixels: crate::DepthPixelMetrics,
+        at: MonoTime,
+        pixel_contract_valid: bool,
+    ) -> QualityResult<()> {
+        self.check_time(&at)?;
+        pixels.validate()?;
+        let state = self
+            .streams
+            .get_mut(&context.stream_id)
+            .ok_or("STREAM_UNKNOWN")?;
+        if state.latest_context.as_ref() != Some(context) {
+            return Err("PIXEL_CONTEXT_MISMATCH");
+        }
+        let sample = state.metrics.latest_mut(context.received_mono_offset_ns)?;
+        if sample.pixels.is_some() {
+            return Err("PIXEL_OBSERVATION_DUPLICATE");
+        }
+        let passed = sample.contract_valid
+            && pixel_contract_valid
+            && pixels.valid_fraction() >= self.policy.quality.min_valid_fraction
+            && pixels.zero_fraction() <= self.policy.quality.max_zero_fraction;
+        let evaluate = sample.contract_valid;
+        let base_passed = sample.base_passed;
+        // The original receipt's bool sample is retained in the same window.
+        let window = state.window.latest_mut(context.received_mono_offset_ns)?;
+        *window = base_passed && passed;
+        state
+            .metrics
+            .latest_mut(context.received_mono_offset_ns)?
+            .pixels = Some(pixels);
+        if evaluate {
+            self.evaluate(
+                at.clone(),
+                Scope::Stream(context.stream_id.clone()),
+                FrameViolation::FrameContractInvalid,
+                if passed {
+                    Condition::Healthy
+                } else {
+                    Condition::Violated
+                },
+            )?;
+        }
         self.last_ns = at.offset_ns;
         Ok(())
     }
     pub fn observe_pair_delta(&mut self, at: MonoTime, delta_us: u64) -> QualityResult<()> {
+        self.check_time(&at)?;
+        self.pair_delta.push(&at, delta_us)?;
         let condition = if delta_us > self.policy.quality.max_pair_delta_us {
             Condition::Violated
         } else {
@@ -649,8 +802,54 @@ impl QualityEngine {
             condition,
         )
     }
+    /// One real lifecycle interruption, independent of frame thresholds/action.
+    /// No receipt/pixel count or SDK-disconnection provenance is fabricated.
+    pub fn interrupt(&mut self, at: MonoTime, reason: InterruptionReason) -> QualityResult<()> {
+        self.check_time(&at)?;
+        if let Some(existing) = self.interruption_reason {
+            return if existing == reason {
+                Ok(())
+            } else {
+                Err("SESSION_ALREADY_INTERRUPTED")
+            };
+        }
+        let sequence = self
+            .event_sequence
+            .checked_add(1)
+            .ok_or("EVENT_SEQUENCE_EXHAUSTED")?;
+        let active = ActiveEpisode {
+            episode_sequence: sequence,
+            violation: FrameViolation::ObserverInterrupted,
+            scope: Scope::Group,
+            severity: QualityState::Failed,
+            origin: at.clone(),
+            last_observed: at.clone(),
+            bad_observations: 1,
+            recovery_observations: 0,
+        };
+        self.emit(QualityEvent {
+            version: QUALITY_VERSION,
+            sequence: 0,
+            episode_sequence: sequence,
+            violation: FrameViolation::ObserverInterrupted,
+            scope: Scope::Group,
+            transition: EventTransition::Opened,
+            severity: QualityState::Failed,
+            at: at.clone(),
+            origin: at.clone(),
+            bad_observations: 1,
+            recovery_observations: 0,
+            interruption_reason: Some(reason),
+        })?;
+        self.active
+            .insert((FrameViolation::ObserverInterrupted, Scope::Group), active);
+        self.interruption_reason = Some(reason);
+        self.last_ns = at.offset_ns;
+        Ok(())
+    }
     pub fn finalize_session(&mut self) -> SessionSummary {
         let summary = SessionSummary {
+            interruption_reason: self.interruption_reason,
             version: QUALITY_VERSION,
             session_id: self.current_session.clone(),
             finalized: true,
@@ -684,6 +883,18 @@ impl QualityEngine {
         self.seen.insert(session.clone());
         self.last_ns = 0;
         self.finalized = false;
+        self.interruption_reason = None;
+        self.pair_delta = RollingWindow::new(
+            session.clone(),
+            self.policy.window_capacity,
+            self.policy.window_horizon_ns,
+        )?;
+        self.diagnostic_window = RollingWindow::new(
+            session.clone(),
+            self.policy.window_capacity,
+            self.policy.window_horizon_ns,
+        )?;
+        self.diagnostic_counts.clear();
         for state in self.streams.values_mut() {
             *state = Self::new_stream(&self.policy, &session)?;
         }
@@ -772,7 +983,19 @@ impl QualityEngine {
                         / stream.window.len() as f64
                         >= self.policy.quality.min_valid_fraction
             });
+        let mut window_counts = BTreeMap::new();
+        for (_, kind) in self.diagnostic_window.iter() {
+            *window_counts.entry(*kind).or_insert(0) += 1;
+        }
         QualitySnapshot {
+            interruption_reason: self.interruption_reason,
+            pair_delta_us: crate::metrics::summarize(
+                self.pair_delta.iter().map(|(_, v)| *v as f64),
+            ),
+            diagnostics: crate::DiagnosticSnapshot {
+                session_counts: self.diagnostic_counts.clone(),
+                window_counts,
+            },
             version: QUALITY_VERSION,
             origin_session_id: self.origin_session.clone(),
             session_id: self.current_session.clone(),
@@ -792,6 +1015,7 @@ impl QualityEngine {
                     (
                         name.clone(),
                         StreamQuality {
+                            window_metrics: stream_metrics(state),
                             frame_count: state.frames,
                             recent_frames: state.window.len(),
                             recent_checks_passed_fraction: if state.window.is_empty() {
@@ -830,4 +1054,38 @@ impl QualityEngine {
             result,
         })
     }
+}
+
+fn stream_metrics(state: &StreamState) -> crate::StreamWindowMetrics {
+    let mut result = crate::StreamWindowMetrics::default();
+    let receipts: Vec<_> = state.metrics.iter().map(|(ns, _)| *ns).collect();
+    if let (Some(first), Some(last)) = (receipts.first(), receipts.last()) {
+        if receipts.len() > 1 && last > first {
+            result.active_window_fps =
+                Some((receipts.len() - 1) as f64 * 1e9 / (last - first) as f64);
+        }
+    }
+    result.max_receive_gap_ns = receipts.windows(2).map(|p| p[1] - p[0]).max();
+    result.source_age_ns =
+        crate::metrics::summarize(state.metrics.iter().filter_map(|(_, sample)| sample.age_ns));
+    let mut totals: Option<crate::DepthPixelMetrics> = None;
+    for (_, sample) in state.metrics.iter() {
+        if let Some(p) = sample.pixels {
+            let total = totals.get_or_insert(crate::DepthPixelMetrics {
+                samples: 0,
+                zero_samples: 0,
+                nonzero_samples: 0,
+                max_u16_samples: 0,
+            });
+            total.samples = total.samples.saturating_add(p.samples);
+            total.zero_samples = total.zero_samples.saturating_add(p.zero_samples);
+            total.nonzero_samples = total.nonzero_samples.saturating_add(p.nonzero_samples);
+            total.max_u16_samples = total.max_u16_samples.saturating_add(p.max_u16_samples);
+        }
+    }
+    result.depth_pixels = totals;
+    result.valid_fraction = totals.map(|p| p.valid_fraction());
+    result.zero_fraction = totals.map(|p| p.zero_fraction());
+    result.max_u16_fraction = totals.map(|p| p.max_u16_fraction());
+    result
 }

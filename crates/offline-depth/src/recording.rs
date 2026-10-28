@@ -1,0 +1,908 @@
+//! Versioned recording boundary. Observed associations never become SDK framesets.
+use super::*;
+use capture_contract::{DepthRepresentation, QuantizationPolicy};
+use capture_observer::{DecodedCameraInfo, MetadataProvenance, ObservedAssociation};
+use quality_core::{ClockMapper, SourceClock, SourceStamp, map_source_time};
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileRef {
+    pub path: String,
+    pub sha256: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredImage {
+    pub file: FileRef,
+    pub topic: Option<String>,
+    pub record_timestamp_ns: Option<u64>,
+    pub header_timestamp_ns: Option<u64>,
+    pub frame_id: String,
+    pub width: u32,
+    pub height: u32,
+    pub stride: usize,
+    pub encoding: String,
+    pub endian: StorageEndian,
+    pub camera_info: Option<FileRef>,
+    #[serde(default)]
+    pub metadata: Option<FileRef>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum TaggedEvidence {
+    SdkBoundPair {
+        pair: BoundPairEvidence,
+        #[serde(default)]
+        source_json: Option<FileRef>,
+    },
+    ObservedAssociation {
+        association: ObservedAssociation,
+        header_mapping: ClockMapper,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordingRecord {
+    pub sequence: u64,
+    pub evidence: FileRef,
+    pub color: StoredImage,
+    pub depth: StoredImage,
+    pub storage_representation: DepthRepresentation,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordingManifest {
+    pub version: u32,
+    pub source_kind: String,
+    pub snapshot: String,
+    pub binding: SnapshotBinding,
+    pub records: String,
+    pub records_sha256: String,
+    pub record_count: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotAssociation {
+    pub version: u32,
+    pub native_snapshot_id: capture_contract::SnapshotId,
+    pub ros_snapshot_id: capture_contract::SnapshotId,
+}
+fn validate_snapshot_association(
+    native: &SnapshotEnvelope,
+    ros: &SnapshotEnvelope,
+    link: &SnapshotAssociation,
+) -> Result<()> {
+    native.verify(&native.content.binding)?;
+    ros.verify(&native.content.binding)?;
+    let mut expected = ros.content.clone();
+    expected.depth = native.content.depth.clone();
+    require(
+        link.version == 1
+            && link.native_snapshot_id == native.snapshot_id
+            && link.ros_snapshot_id == ros.snapshot_id
+            && matches!(native.content.depth, DepthRepresentation::SdkCounts { .. })
+            && matches!(ros.content.depth, DepthRepresentation::Millimetres { .. })
+            && expected == native.content,
+        "NATIVE_ROS_SNAPSHOT_BINDING",
+    )
+}
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        result.push(HEX[(byte >> 4) as usize] as char);
+        result.push(HEX[(byte & 15) as usize] as char);
+    }
+    result
+}
+struct Progress {
+    sequence: u64,
+    color: u64,
+    depth: u64,
+    color_mono: u64,
+    depth_mono: u64,
+    kind: &'static str,
+    color_sequence: Option<u64>,
+    depth_sequence: Option<u64>,
+}
+pub struct RecordingDirectorySource {
+    root: PathBuf,
+    manifest: RecordingManifest,
+    snapshot: SnapshotEnvelope,
+    reader: BufReader<fs::File>,
+    digest: ring::digest::Context,
+    seen: u64,
+    previous: Option<Progress>,
+    finished: bool,
+}
+pub struct RecordedFrame {
+    pub record: RecordingRecord,
+    pub evidence: TaggedEvidence,
+    pub evidence_json: Vec<u8>,
+    pub depth: Vec<u8>,
+}
+impl RecordingDirectorySource {
+    pub fn open(root: &Path) -> Result<Self> {
+        let root = fs::canonicalize(root)?;
+        let manifest: RecordingManifest = parse(&read_bounded(
+            &member(&root, "manifest.json")?,
+            4 * 1024 * 1024,
+        )?)?;
+        require(
+            manifest.version == 2 && manifest.source_kind == "recording-directory-v2",
+            "RECORDING_VERSION",
+        )?;
+        require(
+            manifest.record_count > 0 && digest_valid(&manifest.records_sha256),
+            "RECORDING_INDEX",
+        )?;
+        let snapshot = SnapshotEnvelope::parse(
+            &read_bounded(&member(&root, &manifest.snapshot)?, 4 * 1024 * 1024)?,
+            &manifest.binding,
+        )?;
+        if root.join("snapshot-association.json").exists()
+            || root.join("ros-snapshot.json").exists()
+        {
+            let link: SnapshotAssociation = parse(&read_bounded(
+                &member(&root, "snapshot-association.json")?,
+                65536,
+            )?)?;
+            let ros = SnapshotEnvelope::parse(
+                &read_bounded(&member(&root, "ros-snapshot.json")?, 4 * 1024 * 1024)?,
+                &manifest.binding,
+            )?;
+            validate_snapshot_association(&snapshot, &ros, &link)?;
+        }
+        let index_path = member(&root, &manifest.records)?;
+        require(fs::metadata(&index_path)?.is_file(), "SOURCE_NOT_FILE")?;
+        let file = fs::File::open(index_path)?;
+        require(file.metadata()?.is_file(), "SOURCE_NOT_FILE")?;
+        Ok(Self {
+            root,
+            manifest,
+            snapshot,
+            reader: BufReader::new(file),
+            digest: ring::digest::Context::new(&ring::digest::SHA256),
+            seen: 0,
+            previous: None,
+            finished: false,
+        })
+    }
+    pub fn snapshot(&self) -> &SnapshotEnvelope {
+        &self.snapshot
+    }
+    fn file(&self, file: &FileRef, max: usize) -> Result<Vec<u8>> {
+        require(digest_valid(&file.sha256), "RECORDING_DIGEST_FORMAT")?;
+        let bytes = read_bounded(&member(&self.root, &file.path)?, max)?;
+        require(sha256(&bytes) == file.sha256, "RECORDING_DIGEST")?;
+        Ok(bytes)
+    }
+    fn image(&self, image: &StoredImage, stream: &str, observed: bool) -> Result<Vec<u8>> {
+        let model = self
+            .snapshot
+            .content
+            .calibration
+            .models
+            .get(stream)
+            .ok_or(OfflineError::Invalid("CALIBRATION_STREAM_MISSING"))?;
+        require(
+            image.width == model.width
+                && image.height == model.height
+                && image.frame_id == model.frame_id,
+            "RECORDING_IMAGE_BINDING",
+        )?;
+        let bpp = match (stream, image.encoding.as_str()) {
+            ("depth", "depth16" | "16UC1") => 2usize,
+            ("color", "yuyv") => 2,
+            ("color", "rgb8" | "bgr8") => 3,
+            _ => return Err(OfflineError::Invalid("RECORDING_ENCODING")),
+        };
+        require(
+            image.width > 0
+                && image.height > 0
+                && image.stride >= image.width as usize * bpp
+                && (image.encoding != "yuyv" || image.width % 2 == 0),
+            "RECORDING_LAYOUT",
+        )?;
+        let length = image
+            .stride
+            .checked_mul(image.height as usize)
+            .ok_or(OfflineError::Invalid("RECORDING_LAYOUT"))?;
+        require(length <= 64 * 1024 * 1024, "RECORDING_PAYLOAD_LIMIT")?;
+        let bytes = self.file(&image.file, 64 * 1024 * 1024)?;
+        require(bytes.len() == length, "RECORDING_PAYLOAD_LENGTH")?;
+        if observed {
+            require(
+                image
+                    .topic
+                    .as_ref()
+                    .is_some_and(|s| s.starts_with('/') && s.len() <= 1024)
+                    && image.record_timestamp_ns.is_some_and(|v| v > 0),
+                "OBSERVED_WIRE_CONTEXT",
+            )?;
+            let info: DecodedCameraInfo = parse(
+                &self.file(
+                    image
+                        .camera_info
+                        .as_ref()
+                        .ok_or(OfflineError::Invalid("OBSERVED_INFO_REQUIRED"))?,
+                    65536,
+                )?,
+            )?;
+            let distortion = match model.distortion_model {
+                capture_contract::DistortionModel::None => "",
+                capture_contract::DistortionModel::PlumbBob => "plumb_bob",
+                capture_contract::DistortionModel::RationalPolynomial => "rational_polynomial",
+                capture_contract::DistortionModel::Equidistant => "equidistant",
+            };
+            require(
+                info.frame_id == image.frame_id
+                    && info.width == image.width
+                    && info.height == image.height
+                    && info.k == model.k
+                    && info.d == model.distortion_coefficients
+                    && (info.distortion_model == distortion
+                        || distortion.is_empty() && info.distortion_model == "none")
+                    && info.r == [1., 0., 0., 0., 1., 0., 0., 0., 1.]
+                    && info.binning.iter().all(|v| *v <= 1)
+                    && info.p.iter().all(|v| v.is_finite())
+                    && info.roi == [0; 4]
+                    && !info.roi_do_rectify
+                    && Some(
+                        info.stamp
+                            .to_ns()
+                            .map_err(|_| OfflineError::Invalid("OBSERVED_INFO_STAMP"))?,
+                    ) == image.header_timestamp_ns,
+                "OBSERVED_INFO_BINDING",
+            )?;
+        }
+        Ok(bytes)
+    }
+    pub fn next_frame(&mut self) -> Result<Option<RecordedFrame>> {
+        if self.finished {
+            return Ok(None);
+        }
+        let mut line = Vec::new();
+        let n = self
+            .reader
+            .by_ref()
+            .take(65537)
+            .read_until(b'\n', &mut line)?;
+        require(n <= 65536, "RECORDING_INDEX_LINE_LIMIT")?;
+        if n == 0 {
+            let actual = lower_hex(self.digest.clone().finish().as_ref());
+            require(
+                self.seen == self.manifest.record_count && actual == self.manifest.records_sha256,
+                "RECORDING_INDEX_INCOMPLETE",
+            )?;
+            self.finished = true;
+            return Ok(None);
+        }
+        self.digest.update(&line);
+        require(
+            self.seen < self.manifest.record_count,
+            "RECORDING_INDEX_COUNT",
+        )?;
+        let record: RecordingRecord = parse(&line)?;
+        record.storage_representation.validate()?;
+        let evidence_json = self.file(&record.evidence, 4 * 1024 * 1024)?;
+        let evidence: TaggedEvidence = parse(&evidence_json)?;
+        let (color, depth, color_time, depth_time, kind) = match &evidence {
+            TaggedEvidence::SdkBoundPair { pair, source_json } => {
+                if let Some(file) = source_json {
+                    let original: BoundPairEvidence = parse(&self.file(file, 4 * 1024 * 1024)?)?;
+                    require(
+                        serde_json::to_value(&original)? == serde_json::to_value(pair)?,
+                        "SDK_ORIGINAL_JSON_BINDING",
+                    )?;
+                }
+                require(
+                    pair.delta_us <= self.snapshot.content.quality_policy.max_pair_delta_us,
+                    "PAIR_SKEW",
+                )?;
+                pair.validate()
+                    .map_err(|_| OfflineError::Invalid("PAIR_EVIDENCE_INVALID"))?;
+                require(
+                    pair.pair_sequence == record.sequence,
+                    "PAIR_SEQUENCE_BINDING",
+                )?;
+                for (stored, e) in [(&record.color, &pair.color), (&record.depth, &pair.depth)] {
+                    require(
+                        stored.width == e.width
+                            && stored.height == e.height
+                            && stored.stride == e.stride
+                            && stored.encoding == e.encoding,
+                        "SDK_STORED_LAYOUT_BINDING",
+                    )?;
+                    if stored.topic.is_some()
+                        || stored.header_timestamp_ns.is_some()
+                        || stored.record_timestamp_ns.is_some()
+                    {
+                        require(
+                            stored
+                                .topic
+                                .as_ref()
+                                .is_some_and(|v| v.starts_with('/') && v.len() <= 1024)
+                                && stored.record_timestamp_ns.is_some_and(|v| v > 0)
+                                && stored.header_timestamp_ns
+                                    == e.context
+                                        .system_timestamp_us
+                                        .and_then(|v| v.checked_mul(1000)),
+                            "SDK_WIRE_HEADER_BINDING",
+                        )?;
+                    }
+                }
+                let scale = representation_scale(&record.storage_representation);
+                require(
+                    pair.depth.output_depth_scale_mm.map(f64::from) == Some(scale),
+                    "SDK_STORED_SCALE_BINDING",
+                )?;
+                if record.storage_representation != self.snapshot.content.depth {
+                    require(
+                        matches!(
+                            record.storage_representation,
+                            DepthRepresentation::SdkCounts { .. }
+                        ) && !pair.depth.normalized
+                            && pair.depth.source_depth_scale_mm == pair.depth.output_depth_scale_mm
+                            && self
+                                .snapshot
+                                .content
+                                .configuration
+                                .get("source_depth_scale_mm")
+                                .and_then(|v| v.as_f64())
+                                == Some(scale),
+                        "SDK_RAW_SOURCE_BINDING",
+                    )?;
+                }
+                (
+                    pair.color.context.clone(),
+                    pair.depth.context.clone(),
+                    pair.color_stamp_us,
+                    pair.depth_stamp_us,
+                    "sdk-bound-pair",
+                )
+            }
+            TaggedEvidence::ObservedAssociation {
+                association: a,
+                header_mapping,
+            } => {
+                require(
+                    a.version == 1
+                        && a.association_sequence == record.sequence
+                        && a.same_sdk_frameset.is_none()
+                        && !a.hardware_sync_verified
+                        && a.delta_ns == a.color.mapped_unix_ns.abs_diff(a.depth.mapped_unix_ns)
+                        && a.delta_ns
+                            <= self
+                                .snapshot
+                                .content
+                                .quality_policy
+                                .max_pair_delta_us
+                                .checked_mul(1000)
+                                .ok_or(OfflineError::Invalid("PAIR_SKEW"))?,
+                    "OBSERVED_ASSOCIATION_INVALID",
+                )?;
+                require(matches!(record.storage_representation,DepthRepresentation::Millimetres{quantization:QuantizationPolicy::NearestHalfUpPreserveZeroClampPositiveRejectOverflow}) && record.storage_representation==self.snapshot.content.depth,"OBSERVED_COUNTS_UNRECOVERABLE")?;
+                for (stored, frame) in [(&record.color, &a.color), (&record.depth, &a.depth)] {
+                    require(
+                        frame.observation_sequence > 0
+                            && stored.header_timestamp_ns == Some(frame.observed_header_ns)
+                            && frame.observed_header_ns > 0
+                            && frame.mapped_unix_ns > 0,
+                        "OBSERVED_HEADER_BINDING",
+                    )?;
+                    require(
+                        matches!(
+                            header_mapping,
+                            ClockMapper::DeclaredObservedUnixHeader
+                                | ClockMapper::MeasuredObservedHeaderOffset { .. }
+                        ) && map_source_time(
+                            SourceStamp {
+                                clock: SourceClock::ObservedHeaderNanoseconds,
+                                value: frame.observed_header_ns,
+                            },
+                            *header_mapping,
+                        )
+                        .ok()
+                            == Some(frame.mapped_unix_ns),
+                        "OBSERVED_TIME_MAPPING",
+                    )?;
+                    if frame.metadata_provenance == MetadataProvenance::Unobserved {
+                        require(
+                            frame.context.sequence.is_none()
+                                && frame.context.device_timestamp_us.is_none()
+                                && frame.context.system_timestamp_us.is_none()
+                                && frame.reported_source_session.is_none(),
+                            "OBSERVED_UNKNOWN_SDK_BINDING",
+                        )?;
+                    } else {
+                        let raw = self.file(
+                            stored
+                                .metadata
+                                .as_ref()
+                                .ok_or(OfflineError::Invalid("OBSERVED_METADATA_REQUIRED"))?,
+                            4096,
+                        )?;
+                        let value = capture_contract::parse_strict(&raw)?;
+                        require(
+                            value["version"] == 1
+                                && value["frame_id"].as_str() == Some(stored.frame_id.as_str())
+                                && value["stamp_sec"]
+                                    .as_u64()
+                                    .and_then(|v| v.checked_mul(1_000_000_000))
+                                    .and_then(|v| {
+                                        value["stamp_nanosec"]
+                                            .as_u64()
+                                            .and_then(|n| v.checked_add(n))
+                                    })
+                                    == Some(frame.observed_header_ns)
+                                && value.get("sequence").and_then(|v| v.as_u64())
+                                    == frame.context.sequence
+                                && value.get("device_timestamp_us").and_then(|v| v.as_u64())
+                                    == frame.context.device_timestamp_us
+                                && value.get("system_timestamp_us").and_then(|v| v.as_u64())
+                                    == frame.context.system_timestamp_us
+                                && value.get("session_id").and_then(|v| v.as_str())
+                                    == frame.reported_source_session.as_ref().map(|v| v.as_str()),
+                            "OBSERVED_METADATA_BINDING",
+                        )?;
+                    }
+                }
+                (
+                    a.color.context.clone(),
+                    a.depth.context.clone(),
+                    a.color.mapped_unix_ns,
+                    a.depth.mapped_unix_ns,
+                    "observed-association",
+                )
+            }
+        };
+        require(
+            context_binding(&color, &self.snapshot)
+                && context_binding(&depth, &self.snapshot)
+                && color.stream_id == "color"
+                && depth.stream_id == "depth",
+            "PAIR_SNAPSHOT_BINDING",
+        )?;
+        color.validate()?;
+        depth.validate()?;
+        require(record.sequence > 0, "PAIR_SEQUENCE_BINDING")?;
+        if let Some(last) = &self.previous {
+            require(
+                record.sequence > last.sequence
+                    && kind == last.kind
+                    && (kind != "sdk-bound-pair"
+                        || color.sequence > last.color_sequence
+                            && depth.sequence > last.depth_sequence)
+                    && color_time > last.color
+                    && depth_time > last.depth
+                    && color.received_mono_offset_ns >= last.color_mono
+                    && depth.received_mono_offset_ns >= last.depth_mono,
+                "SOURCE_PROGRESSION",
+            )?;
+        }
+        let observed = matches!(evidence, TaggedEvidence::ObservedAssociation { .. });
+        let _color = self.image(&record.color, "color", observed)?;
+        let depth_bytes = self.image(&record.depth, "depth", observed)?;
+        self.previous = Some(Progress {
+            sequence: record.sequence,
+            color: color_time,
+            depth: depth_time,
+            color_mono: color.received_mono_offset_ns,
+            depth_mono: depth.received_mono_offset_ns,
+            kind,
+            color_sequence: color.sequence,
+            depth_sequence: depth.sequence,
+        });
+        self.seen += 1;
+        Ok(Some(RecordedFrame {
+            record,
+            evidence,
+            evidence_json,
+            depth: depth_bytes,
+        }))
+    }
+}
+/// Blocking, one-record-at-a-time conversion. EOF verifies the complete index
+/// digest before Job::finish; any failure leaves only the existing partial job.
+pub fn process(
+    source: &mut RecordingDirectorySource,
+    output: Option<(&Path, &str, depth_output::Mode)>,
+    operation: Operation,
+) -> Result<RunReport> {
+    if output.is_some() {
+        require(
+            !source
+                .root
+                .file_name()
+                .is_some_and(|v| v.to_string_lossy().ends_with(".partial"))
+                && !source.root.join("INTERRUPTED.json").exists()
+                && !source.root.join("FAILED.json").exists(),
+            "INCOMPLETE_RECORDING_INPUT",
+        )?;
+    }
+    let snapshot = source.snapshot.clone();
+    let mut g = if matches!(operation, Operation::DepthToColor) {
+        Some(geometry(&snapshot)?)
+    } else {
+        None
+    };
+    let mut job = output
+        .map(|(p, n, m)| depth_output::Job::create(p, n, m, snapshot.snapshot_id.clone()))
+        .transpose()?;
+    if let Some(job) = job.as_mut() {
+        job.attach_json("snapshot.json", &snapshot.to_bytes()?)?;
+    }
+    if let Some(job) = job.as_mut() {
+        if source.root.join("snapshot-association.json").is_file() {
+            let link = read_bounded(&member(&source.root, "snapshot-association.json")?, 65536)?;
+            let ros = read_bounded(&member(&source.root, "ros-snapshot.json")?, 4 * 1024 * 1024)?;
+            let link_digest = sha256(&link);
+            let ros_digest = sha256(&ros);
+            job.attach_source_blob(&link_digest, &link)?;
+            job.attach_source_blob(&ros_digest, &ros)?;
+            job.attach_json("recording-context.json",&serde_json::to_vec(&serde_json::json!({"version":1,"snapshot_association_sha256":link_digest,"ros_snapshot_sha256":ros_digest}))?)?;
+        }
+    }
+
+    let mut report = RunReport {
+        version: 2,
+        complete: false,
+        validated_pairs: 0,
+        written_frames: 0,
+        d2c: matches!(operation, Operation::DepthToColor),
+        normalized_frames: 0,
+    };
+    while let Some(frame) = source.next_frame()? {
+        let context = match &frame.evidence {
+            TaggedEvidence::SdkBoundPair { pair, .. } => &pair.depth.context,
+            TaggedEvidence::ObservedAssociation { association, .. } => &association.depth.context,
+        };
+        let (encoded, normalized) = convert_material(
+            &frame.depth,
+            frame.record.depth.endian,
+            context,
+            frame.record.depth.width,
+            frame.record.depth.height,
+            frame.record.depth.stride,
+            frame.record.sequence,
+            &frame.record.evidence.sha256,
+            &frame.record.storage_representation,
+            operation,
+            &mut g,
+            report.validated_pairs,
+        )?;
+        if let Some(job) = job.as_mut() {
+            let mut files = vec![
+                &frame.record.evidence,
+                &frame.record.color.file,
+                &frame.record.depth.file,
+            ];
+            for image in [&frame.record.color, &frame.record.depth] {
+                if let Some(file) = &image.camera_info {
+                    files.push(file);
+                }
+                if let Some(file) = &image.metadata {
+                    files.push(file);
+                }
+            }
+            if let TaggedEvidence::SdkBoundPair {
+                source_json: Some(file),
+                ..
+            } = &frame.evidence
+            {
+                files.push(file);
+            }
+            for file in files {
+                let bytes = source.file(file, 64 * 1024 * 1024)?;
+                job.attach_source_blob(&file.sha256, &bytes)?;
+            }
+            job.attach_json(
+                &format!("recording-record-{:020}.json", frame.record.sequence),
+                &serde_json::to_vec(&frame.record)?,
+            )?;
+        }
+        if let Some(job) = job.as_mut() {
+            job.attach_json(
+                &format!("pair-evidence-{:020}.json", frame.record.sequence),
+                &frame.evidence_json,
+            )?;
+            job.append(&encoded)?;
+        }
+        report.validated_pairs += 1;
+        report.normalized_frames += u64::from(normalized);
+    }
+    require(report.validated_pairs > 0, "SOURCE_EMPTY")?;
+    if let Some(job) = job {
+        job.finish()?;
+        report.written_frames = report.validated_pairs;
+    }
+    report.complete = true;
+    Ok(report)
+}
+
+/// Optional native SDK sink. No SDK handles cross this API; caller owns both
+/// copied pixel buffers. Bounded acquisition queues remain the caller's policy.
+pub struct RawRecordingWriter {
+    stage: PathBuf,
+    final_path: PathBuf,
+    snapshot: SnapshotEnvelope,
+    records: fs::File,
+    digest: ring::digest::Context,
+    count: u64,
+    failed: bool,
+    completed: bool,
+    max_bytes: u64,
+    used_bytes: u64,
+}
+impl RawRecordingWriter {
+    pub fn begin(parent: &Path, name: &str, snapshot: SnapshotEnvelope) -> Result<Self> {
+        Self::begin_with_limit(parent, name, snapshot, u64::MAX)
+    }
+    pub fn begin_with_limit(
+        parent: &Path,
+        name: &str,
+        snapshot: SnapshotEnvelope,
+        max_bytes: u64,
+    ) -> Result<Self> {
+        snapshot.verify(&snapshot.content.binding)?;
+        require(
+            !name.is_empty()
+                && name.len() <= 128
+                && name
+                    .bytes()
+                    .all(|v| v.is_ascii_alphanumeric() || v == b'-' || v == b'_'),
+            "RECORDING_NAME",
+        )?;
+        let final_path = parent.join(name);
+        require(!final_path.exists(), "OUTPUT_EXISTS")?;
+        let stage = parent.join(format!("{name}.partial"));
+        fs::create_dir(&stage)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&stage, fs::Permissions::from_mode(0o700))?;
+        }
+        let snapshot_bytes = snapshot.to_bytes()?;
+        require(
+            max_bytes > 0 && snapshot_bytes.len() as u64 <= max_bytes,
+            "RECORDING_BYTE_LIMIT",
+        )?;
+        write_private(&stage.join("snapshot.json"), &snapshot_bytes)?;
+        let records = new_private(&stage.join("records.jsonl"))?;
+        Ok(Self {
+            stage,
+            final_path,
+            snapshot,
+            records,
+            digest: ring::digest::Context::new(&ring::digest::SHA256),
+            count: 0,
+            failed: false,
+            completed: false,
+            max_bytes,
+            used_bytes: snapshot_bytes.len() as u64,
+        })
+    }
+    /// Persist the original ROS/mm snapshot link before any native pair. It is
+    /// public provenance, not a claim that mm can recover original SDK counts.
+    pub fn attach_ros_snapshot(&mut self, ros: &SnapshotEnvelope) -> Result<()> {
+        require(!self.failed, "RECORDING_ALREADY_FAILED")?;
+        let result = (|| -> Result<()> {
+            require(self.count == 0, "SNAPSHOT_LINK_AFTER_PIXELS")?;
+            let link = SnapshotAssociation {
+                version: 1,
+                native_snapshot_id: self.snapshot.snapshot_id.clone(),
+                ros_snapshot_id: ros.snapshot_id.clone(),
+            };
+            validate_snapshot_association(&self.snapshot, ros, &link)?;
+            self.write_budgeted("ros-snapshot.json", &ros.to_bytes()?)?;
+            self.write_budgeted("snapshot-association.json", &serde_json::to_vec(&link)?)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+    pub fn append(
+        &mut self,
+        pair: &BoundPairEvidence,
+        color: &[u8],
+        depth: &[u8],
+        endian: StorageEndian,
+    ) -> Result<()> {
+        require(!self.failed, "RECORDING_ALREADY_FAILED")?;
+        let result = self.append_inner(pair, color, depth, endian);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+    fn append_inner(
+        &mut self,
+        pair: &BoundPairEvidence,
+        color: &[u8],
+        depth: &[u8],
+        endian: StorageEndian,
+    ) -> Result<()> {
+        use std::io::Write;
+        pair.validate()
+            .map_err(|_| OfflineError::Invalid("PAIR_EVIDENCE_INVALID"))?;
+        require(
+            !pair.depth.normalized
+                && pair.depth.source_depth_scale_mm == pair.depth.output_depth_scale_mm,
+            "NATIVE_COUNTS_REQUIRED",
+        )?;
+        require(
+            context_binding(&pair.color.context, &self.snapshot)
+                && context_binding(&pair.depth.context, &self.snapshot),
+            "PAIR_SNAPSHOT_BINDING",
+        )?;
+        let sequence = pair.pair_sequence;
+        let mut store =
+            |role: &str, frame: &frame_core::FrameEvidence, pixels: &[u8]| -> Result<StoredImage> {
+                let length = frame
+                    .stride
+                    .checked_mul(frame.height as usize)
+                    .ok_or(OfflineError::Invalid("RECORDING_LAYOUT"))?;
+                require(
+                    length <= 64 * 1024 * 1024 && pixels.len() == length,
+                    "RECORDING_PAYLOAD_LENGTH",
+                )?;
+                let path = format!("{role}-{sequence:020}.raw");
+                self.write_budgeted(&path, pixels)?;
+                let model = self
+                    .snapshot
+                    .content
+                    .calibration
+                    .models
+                    .get(role)
+                    .ok_or(OfflineError::Invalid("CALIBRATION_STREAM_MISSING"))?;
+                Ok(StoredImage {
+                    file: FileRef {
+                        path,
+                        sha256: sha256(pixels),
+                    },
+                    topic: None,
+                    record_timestamp_ns: None,
+                    header_timestamp_ns: None,
+                    frame_id: model.frame_id.clone(),
+                    width: frame.width,
+                    height: frame.height,
+                    stride: frame.stride,
+                    encoding: frame.encoding.clone(),
+                    endian,
+                    camera_info: None,
+                    metadata: None,
+                })
+            };
+        let color = store("color", &pair.color, color)?;
+        let depth = store("depth", &pair.depth, depth)?;
+        let evidence = TaggedEvidence::SdkBoundPair {
+            pair: pair.clone(),
+            source_json: None,
+        };
+        let raw = serde_json::to_vec(&evidence)?;
+        let path = format!("evidence-{sequence:020}.json");
+        self.write_budgeted(&path, &raw)?;
+        let record = RecordingRecord {
+            sequence,
+            evidence: FileRef {
+                path,
+                sha256: sha256(&raw),
+            },
+            color,
+            depth,
+            storage_representation: DepthRepresentation::SdkCounts {
+                scale_mm: f64::from(
+                    pair.depth
+                        .source_depth_scale_mm
+                        .ok_or(OfflineError::Invalid("DEPTH_SCALE"))?,
+                ),
+            },
+        };
+        let mut raw = serde_json::to_vec(&record)?;
+        raw.push(b'\n');
+        require(raw.len() <= 65536, "RECORDING_INDEX_LINE_LIMIT")?;
+        self.reserve_bytes(raw.len())?;
+        self.records.write_all(&raw)?;
+        self.digest.update(&raw);
+        self.count += 1;
+        Ok(())
+    }
+    fn reserve_bytes(&mut self, len: usize) -> Result<()> {
+        let total = self
+            .used_bytes
+            .checked_add(len as u64)
+            .ok_or(OfflineError::Invalid("RECORDING_BYTE_LIMIT"))?;
+        require(total <= self.max_bytes, "RECORDING_BYTE_LIMIT")?;
+        // Reserve before IO: short writes must not permit later writes past budget.
+        self.used_bytes = total;
+        Ok(())
+    }
+    fn write_budgeted(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+        self.reserve_bytes(bytes.len())?;
+        write_private(&self.stage.join(name), bytes)?;
+        Ok(())
+    }
+    pub fn finish(self) -> Result<PathBuf> {
+        self.finish_guarded(|| Ok(()))
+    }
+    /// Acquire an application RAII commit guard only after full disk validation.
+    /// The guard stays held through no-replace publication, COMPLETE and fsync.
+    pub fn finish_guarded<G>(mut self, acquire: impl FnOnce() -> Result<G>) -> Result<PathBuf> {
+        require(!self.failed && self.count > 0, "RECORDING_INCOMPLETE")?;
+        self.records.sync_all()?;
+        let records_sha256 = lower_hex(self.digest.clone().finish().as_ref());
+        let manifest = RecordingManifest {
+            version: 2,
+            source_kind: "recording-directory-v2".into(),
+            snapshot: "snapshot.json".into(),
+            binding: self.snapshot.content.binding.clone(),
+            records: "records.jsonl".into(),
+            records_sha256,
+            record_count: self.count,
+        };
+        self.write_budgeted("manifest.json", &serde_json::to_vec(&manifest)?)?;
+        let mut verify = RecordingDirectorySource::open(&self.stage)?;
+        while verify.next_frame()?.is_some() {}
+        let _commit_guard = acquire()?;
+        fs::File::open(&self.stage)?.sync_all()?;
+        // No prepared COMPLETE marker survives a failed no-replace commit.
+        depth_output::rename_directory_no_replace(&self.stage, &self.final_path)?;
+        self.completed = true;
+        let final_path = self.final_path.clone();
+        let completed = (|| -> Result<()> {
+            self.reserve_bytes(b"recording-directory-v2; no business validity decision\n".len())?;
+            write_private(
+                &final_path.join("COMPLETE"),
+                b"recording-directory-v2; no business validity decision\n",
+            )?;
+            fs::File::open(&final_path)?.sync_all()?;
+            fs::File::open(
+                final_path
+                    .parent()
+                    .ok_or(OfflineError::Invalid("RECORDING_PARENT"))?,
+            )?
+            .sync_all()?;
+            Ok(())
+        })();
+        if let Err(error) = completed {
+            // Keep publication failure visibly partial where possible. Never
+            // overwrite a concurrently-created stage when rolling back.
+            let _ = fs::remove_file(final_path.join("COMPLETE"));
+            if depth_output::rename_directory_no_replace(&final_path, &self.stage).is_ok() {
+                self.completed = false;
+            }
+            return Err(error);
+        }
+        Ok(final_path)
+    }
+}
+impl Drop for RawRecordingWriter {
+    fn drop(&mut self) {
+        if !self.completed {
+            let _ = self.write_budgeted(
+                "INTERRUPTED.json",
+                br#"{"version":1,"complete":false,"business_validity":null}"#,
+            );
+        }
+    }
+}
+fn new_private(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = new_private(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}

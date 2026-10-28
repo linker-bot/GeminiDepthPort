@@ -58,6 +58,7 @@ struct ServiceConfig {
     hash: String,
     runtime_contract: Option<Value>,
     quality_runtime: Option<quality_core::RuntimeQualityPolicy>,
+    raw_settings: Option<crate::raw_recording::RawSettings>,
 }
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
@@ -76,6 +77,14 @@ impl ServiceConfig {
         ensure!(raw.len() <= 64 * 1024, "config too large");
         let mut value: Value =
             serde_json::from_value(capture_contract::parse_strict(raw.as_bytes())?)?;
+        let raw_value = value
+            .as_object_mut()
+            .context("config object required")?
+            .remove("raw_recording");
+        let raw_settings = raw_value
+            .as_ref()
+            .map(crate::raw_recording::RawSettings::parse)
+            .transpose()?;
         let quality_runtime = value
             .as_object_mut()
             .context("config object required")?
@@ -146,6 +155,13 @@ impl ServiceConfig {
                 "quality policies disagree"
             );
             capture.configuration["quality_runtime"] = serde_json::to_value(policy)?;
+        }
+        if let Some(raw) = raw_value {
+            ensure!(
+                quality_runtime.is_some(),
+                "raw recording requires explicit runtime quality evidence"
+            );
+            capture.configuration["raw_recording"] = raw;
         }
         ensure!(
             capture.ros.is_some(),
@@ -234,6 +250,7 @@ impl ServiceConfig {
             hash: sha(raw.as_bytes()),
             runtime_contract,
             quality_runtime,
+            raw_settings,
         })
     }
 }
@@ -317,6 +334,8 @@ struct ServiceQuality {
     partial_publications: u64,
     progress: std::collections::BTreeMap<String, (u64, u64)>,
     source_progress_invalid: bool,
+    binding_invalid: bool,
+    contexts: std::collections::BTreeMap<String, capture_contract::FrameContext>,
 }
 impl ServiceQuality {
     fn new(
@@ -354,6 +373,8 @@ impl ServiceQuality {
             partial_publications: 0,
             progress: std::collections::BTreeMap::new(),
             source_progress_invalid: false,
+            binding_invalid: false,
+            contexts: std::collections::BTreeMap::new(),
         })
     }
     fn at(&self, instant: Instant) -> capture_contract::MonoTime {
@@ -388,9 +409,22 @@ impl ServiceQuality {
         snapshot.require_runtime()?;
         ensure!(
             snapshot.content.binding.session_id == self.session
-                && snapshot.content.binding.instance_id.as_str() == self.instance,
+                && snapshot.content.binding.instance_id.as_str() == self.instance
+                && snapshot.content.quality_policy == self.policy.quality,
             "quality snapshot binding"
         );
+        if self
+            .snapshot
+            .as_ref()
+            .is_some_and(|old| old.snapshot_id != snapshot.snapshot_id)
+        {
+            self.diagnostic(quality_core::DiagnosticKind::BindingChanged)?;
+            self.evaluate(
+                quality_core::FrameViolation::FrameContractInvalid,
+                quality_core::Condition::Violated,
+            )?;
+            anyhow::bail!("quality snapshot changed within session");
+        }
         self.snapshot = Some(snapshot.clone());
         Ok(())
     }
@@ -407,6 +441,12 @@ impl ServiceQuality {
             *self.unbound.entry(stream.into()).or_default() += 1;
         }
         let Some(metadata) = metadata else {
+            self.engine
+                .record_diagnostic(
+                    self.at(received),
+                    quality_core::DiagnosticKind::MetadataInvalid,
+                )
+                .map_err(anyhow::Error::msg)?;
             return self
                 .engine
                 .evaluate(
@@ -417,18 +457,58 @@ impl ServiceQuality {
                 )
                 .map_err(anyhow::Error::msg);
         };
-        if let Some(last) = self.progress.get(stream) {
-            if metadata.index <= last.0 || metadata.timestamp_us <= last.1 {
-                self.source_progress_invalid = true;
+        let mut contract_valid = contract_valid;
+        let scale_changed = stream == "depth"
+            && self
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.content.configuration.get("source_depth_scale_mm"))
+                .and_then(Value::as_f64)
+                .is_some_and(|expected| metadata.depth_scale_mm != Some(expected as f32));
+        let dimensions_changed = self
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.content.calibration.models.get(stream))
+            .is_some_and(|m| (m.width, m.height) != (metadata.width, metadata.height));
+        let binding_invalid = self.binding_invalid || scale_changed || dimensions_changed;
+        if binding_invalid {
+            self.binding_invalid = true;
+            contract_valid = false;
+            if scale_changed || dimensions_changed {
+                self.engine
+                    .record_diagnostic(
+                        self.at(received),
+                        if scale_changed {
+                            quality_core::DiagnosticKind::DepthScaleChanged
+                        } else {
+                            quality_core::DiagnosticKind::BindingChanged
+                        },
+                    )
+                    .map_err(anyhow::Error::msg)?;
             }
         }
-        self.progress
-            .entry(stream.into())
-            .and_modify(|last| {
-                last.0 = last.0.max(metadata.index);
-                last.1 = last.1.max(metadata.timestamp_us);
-            })
-            .or_insert((metadata.index, metadata.timestamp_us));
+        if !contract_valid && !binding_invalid {
+            self.engine
+                .record_diagnostic(
+                    self.at(received),
+                    quality_core::DiagnosticKind::MetadataInvalid,
+                )
+                .map_err(anyhow::Error::msg)?;
+        }
+        if !binding_invalid {
+            if let Some(last) = self.progress.get(stream) {
+                if metadata.index <= last.0 || metadata.timestamp_us <= last.1 {
+                    self.source_progress_invalid = true;
+                }
+            }
+            self.progress
+                .entry(stream.into())
+                .and_modify(|last| {
+                    last.0 = last.0.max(metadata.index);
+                    last.1 = last.1.max(metadata.timestamp_us);
+                })
+                .or_insert((metadata.index, metadata.timestamp_us));
+        }
         self.last_observed.insert(stream.into(),json!({"sequence":metadata.index,"device_timestamp_us":metadata.timestamp_us,"system_timestamp_us":metadata.system_timestamp_us,"width":metadata.width,"height":metadata.height,"format":format!("{:?}",metadata.format),"payload_bytes":metadata.data_size,"depth_scale_mm":metadata.depth_scale_mm,"received_mono_offset_ns":self.at(received).offset_ns,"received_unix_ns":received_unix_ns,"contract_valid":contract_valid}));
         let Some(snapshot) = &self.snapshot else {
             if !contract_valid {
@@ -457,26 +537,69 @@ impl ServiceQuality {
             system_timestamp_us: Some(metadata.system_timestamp_us),
             received_mono_offset_ns: self.at(received).offset_ns,
         };
+        self.contexts.insert(stream.into(), context.clone());
+        let observation = quality_core::FrameObservation {
+            context,
+            contract_valid,
+            valid_fraction: None,
+            zero_fraction: None,
+            source: (!binding_invalid).then_some(quality_core::SourceStamp {
+                clock: quality_core::SourceClock::Capture(
+                    capture_contract::ClockDomain::SdkSystemUnixMicroseconds,
+                ),
+                value: metadata.system_timestamp_us,
+            }),
+            mapper: quality_core::ClockMapper::DeclaredSdkSystemUnix,
+            received_unix_ns,
+        };
+        if stream == "depth" {
+            self.engine.record_frame_deferred_pixels(observation)
+        } else {
+            self.engine.record_frame(observation)
+        }
+        .map_err(anyhow::Error::msg)
+    }
+    fn diagnostic(&mut self, kind: quality_core::DiagnosticKind) -> Result<()> {
         self.engine
-            .record_frame(quality_core::FrameObservation {
-                context,
-                contract_valid,
-                valid_fraction: None,
-                zero_fraction: None,
-                source: Some(quality_core::SourceStamp {
-                    clock: quality_core::SourceClock::Capture(
-                        capture_contract::ClockDomain::SdkSystemUnixMicroseconds,
-                    ),
-                    value: metadata.system_timestamp_us,
-                }),
-                mapper: quality_core::ClockMapper::DeclaredSdkSystemUnix,
-                received_unix_ns,
-            })
+            .record_diagnostic(self.at(Instant::now()), kind)
             .map_err(anyhow::Error::msg)
+    }
+    fn pixels(
+        &mut self,
+        source: frame_core::DepthSampleStats,
+        output: Option<frame_core::DepthSampleStats>,
+        contract_valid: bool,
+    ) -> Result<()> {
+        let convert = |s: frame_core::DepthSampleStats| quality_core::DepthPixelMetrics {
+            samples: s.samples,
+            zero_samples: s.zero_samples,
+            nonzero_samples: s.nonzero_samples,
+            max_u16_samples: s.max_u16_samples,
+        };
+        let pixels = convert(source);
+        pixels.validate().map_err(anyhow::Error::msg)?;
+        if let Some(last) = self.last_observed.get_mut("depth") {
+            last["pixel_measurement"] = json!({"kind":"numerical-u16-nonzero-not-physical-certification","source_payload":pixels,"output_payload":output.map(convert),"output_scale_mm":output.map(|_|1.0)});
+        }
+        if let Some(context) = self.contexts.get("depth") {
+            self.engine
+                .record_pixel_metrics(
+                    context,
+                    pixels,
+                    self.at(Instant::now()),
+                    contract_valid && !self.binding_invalid,
+                )
+                .map_err(anyhow::Error::msg)?;
+        }
+        Ok(())
     }
     fn publication(&mut self, ok: bool, completed_calls: u64) -> Result<()> {
         self.publication_calls = self.publication_calls.saturating_add(completed_calls);
         if !ok {
+            self.diagnostic(quality_core::DiagnosticKind::PublicationFailed)?;
+            if completed_calls > 0 {
+                self.diagnostic(quality_core::DiagnosticKind::PublicationPartial)?;
+            }
             self.publication_failures = self.publication_failures.saturating_add(1);
             if completed_calls > 0 {
                 self.partial_publications = self.partial_publications.saturating_add(1);
@@ -492,9 +615,20 @@ impl ServiceQuality {
         )
     }
     fn references(&self) -> Value {
-        json!({"version":1,"state":self.engine.snapshot().state,"latest_event_sequence":self.engine.snapshot().latest_event_sequence,"current_path":self.directory.join("current.json"),"events_path":self.directory.join("events.json"),"summary_path":self.finalized.then(||self.directory.join("summary.json"))})
+        json!({"version":1,"state":self.engine.snapshot().state,"latest_event_sequence":self.engine.snapshot().latest_event_sequence,"current_path":self.directory.join("current.json"),"events_path":self.directory.join("events.json"),"query_path":self.directory.join("query.json"),"summary_path":self.finalized.then(||self.directory.join("summary.json"))})
     }
     fn persist(&mut self) -> Result<()> {
+        let query = self
+            .engine
+            .query(quality_core::QualityQueryRequest {
+                version: 1,
+                query: quality_core::QualityQuery::Snapshot,
+            })
+            .map_err(anyhow::Error::msg)?;
+        atomic_status(
+            &self.directory.join("query.json"),
+            &serde_json::to_value(query)?,
+        )?;
         let current = self.engine.snapshot();
         atomic_status(
             &self.directory.join("current.json"),
@@ -523,6 +657,59 @@ impl ServiceQuality {
     }
 }
 
+fn measure_sdk_depth(frame: &orbbec_safe::Frame) -> Result<frame_core::DepthSampleStats> {
+    let m = frame.metadata()?;
+    ensure!(
+        m.format == orbbec_safe::Format::Depth16,
+        "depth format required"
+    );
+    Ok(frame_core::measure_depth_samples(
+        frame.data()?,
+        frame_core::FrameLayout {
+            width: m.width,
+            height: m.height,
+            stride: m.width as usize * 2,
+            format: frame_core::PixelFormat::Depth16,
+        },
+        false,
+    )?)
+}
+fn missing_streams(
+    color_present: bool,
+    depth_present: bool,
+) -> Option<(&'static str, quality_core::DiagnosticKind)> {
+    match (color_present, depth_present) {
+        (false, false) => Some(("MISSING_BOTH", quality_core::DiagnosticKind::MissingBoth)),
+        (false, true) => Some(("MISSING_COLOR", quality_core::DiagnosticKind::MissingColor)),
+        (true, false) => Some(("MISSING_DEPTH", quality_core::DiagnosticKind::MissingDepth)),
+        (true, true) => None,
+    }
+}
+fn pair_rejection(error: &frame_core::PairError) -> (&'static str, quality_core::FrameViolation) {
+    use frame_core::PairError::*;
+    match error {
+        SkewExceeded => (
+            "PAIR_SKEW_EXCEEDED",
+            quality_core::FrameViolation::PairSkewExceeded,
+        ),
+        PairSequenceNotAdvancing
+        | ColorSequenceNotAdvancing
+        | DepthSequenceNotAdvancing
+        | ColorTimestampNotAdvancing
+        | DepthTimestampNotAdvancing => (
+            "SOURCE_NOT_ADVANCING",
+            quality_core::FrameViolation::TimestampRegression,
+        ),
+        InvalidPolicy => (
+            "PAIR_BINDING_OR_POLICY_INVALID",
+            quality_core::FrameViolation::FrameContractInvalid,
+        ),
+        _ => (
+            "PAIR_FRAME_CONTRACT_INVALID",
+            quality_core::FrameViolation::FrameContractInvalid,
+        ),
+    }
+}
 fn drain_with_quality(
     quality: Option<&mut ServiceQuality>,
     metrics: &mut Metrics,
@@ -549,8 +736,33 @@ struct Status<'a> {
     restarts: u64,
     last_failure: Option<&'static str>,
     quality: Option<ServiceQuality>,
+    raw: Option<crate::raw_recording::RawRecorder>,
 }
 impl Status<'_> {
+    fn observe_raw_quality(&mut self) -> Result<()> {
+        if let Some(reason) = self
+            .raw
+            .as_mut()
+            .and_then(crate::raw_recording::RawRecorder::failure_to_report)
+        {
+            if let Some(q) = &mut self.quality {
+                q.diagnostic(quality_core::DiagnosticKind::RawRecordingFailed)?;
+                q.engine
+                    .evaluate(
+                        q.at(Instant::now()),
+                        quality_core::Scope::Recorder,
+                        if reason == "RAW_QUEUE_OVERFLOW" {
+                            quality_core::FrameViolation::QueueOverflow
+                        } else {
+                            quality_core::FrameViolation::FrameContractInvalid
+                        },
+                        quality_core::Condition::Violated,
+                    )
+                    .map_err(anyhow::Error::msg)?;
+            }
+        }
+        Ok(())
+    }
     fn write(
         &mut self,
         state: &str,
@@ -558,6 +770,7 @@ impl Status<'_> {
         metrics: &Metrics,
         last_pair: Option<Instant>,
     ) -> Result<()> {
+        self.observe_raw_quality()?;
         self.heartbeat += 1;
         if reason.is_some() && reason != Some("SESSION_FAILED") {
             self.last_failure = reason;
@@ -567,7 +780,7 @@ impl Status<'_> {
         }
         atomic_status(
             &self.config.settings.status_path,
-            &json!({"version":1,"kind":"capture-service-status","state":state,"ready":state=="ready","reason":reason,"last_failure_reason":self.last_failure,"session_id":self.session,"instance_id":self.instance,"snapshot_id":self.snapshot.as_ref().map(|s|&s.0),"snapshot_path":self.snapshot.as_ref().map(|s|&s.1),"quality":self.quality.as_ref().map(ServiceQuality::references),"generation":self.config.settings.generation,"config_sha256":self.config.hash,"pid":std::process::id(),"heartbeat_sequence":self.heartbeat,"updated_unix_ms":unix_ms(),"uptime_ms":self.started.elapsed().as_millis(),"restart_attempt":self.restarts,"last_pair_age_ms":last_pair.map(|v|v.elapsed().as_millis()),"pairs_accepted":metrics.accepted,"pairs_rejected":metrics.rejected,"pairs_published":metrics.published_pairs,"individual_publish_calls":metrics.publish_calls,"publish_failures":metrics.publish_failures,"stamp_failures":metrics.stamp_failures,"framesets_observed":metrics.framesets,"missing_pairs":metrics.missing,"skew_rejections":metrics.skew,"monotonic_rejections":metrics.monotonic,"poll_timeouts":metrics.timeouts,"physical_sync_verified":false,"delivery_verified":false}),
+            &json!({"version":1,"kind":"capture-service-status","state":state,"ready":state=="ready","reason":reason,"last_failure_reason":self.last_failure,"session_id":self.session,"instance_id":self.instance,"snapshot_id":self.snapshot.as_ref().map(|s|&s.0),"snapshot_path":self.snapshot.as_ref().map(|s|&s.1),"quality":self.quality.as_ref().map(ServiceQuality::references),"raw_recording":self.raw.as_ref().map(crate::raw_recording::RawRecorder::status),"generation":self.config.settings.generation,"config_sha256":self.config.hash,"pid":std::process::id(),"heartbeat_sequence":self.heartbeat,"updated_unix_ms":unix_ms(),"uptime_ms":self.started.elapsed().as_millis(),"restart_attempt":self.restarts,"last_pair_age_ms":last_pair.map(|v|v.elapsed().as_millis()),"pairs_accepted":metrics.accepted,"pairs_rejected":metrics.rejected,"pairs_published":metrics.published_pairs,"individual_publish_calls":metrics.publish_calls,"publish_failures":metrics.publish_failures,"stamp_failures":metrics.stamp_failures,"framesets_observed":metrics.framesets,"missing_pairs":metrics.missing,"skew_rejections":metrics.skew,"monotonic_rejections":metrics.monotonic,"poll_timeouts":metrics.timeouts,"physical_sync_verified":false,"delivery_verified":false}),
         )
     }
 }
@@ -603,6 +816,7 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
         restarts: restart,
         last_failure: None,
         quality: None,
+        raw: None,
     };
     status.quality = config
         .quality_runtime
@@ -617,6 +831,10 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
             )
         })
         .transpose()?;
+    status.raw = config
+        .raw_settings
+        .clone()
+        .map(|settings| crate::raw_recording::RawRecorder::new(settings, &status.session));
     let mut metrics = Metrics::default();
     let mut last_pair = None;
     status.write("starting", None, &metrics, last_pair)?;
@@ -714,6 +932,11 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
                 sequence += 1;
                 metrics.framesets += 1;
                 let received = Instant::now();
+                if startup {
+                    if let Some(raw) = &status.raw {
+                        raw.observe_excluded(true);
+                    }
+                }
                 let color = set.color()?;
                 let depth = set.depth()?;
                 let received_unix_ns = SystemTime::now()
@@ -724,6 +947,32 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
                 let depth_metadata = depth.as_ref().and_then(|f| f.metadata().ok());
                 if let Some(quality) = &mut status.quality {
                     quality.source_progress_invalid = false;
+                    quality.binding_invalid = quality.snapshot.as_ref().is_some_and(|snapshot| {
+                        let scale = snapshot
+                            .content
+                            .configuration
+                            .get("source_depth_scale_mm")
+                            .and_then(Value::as_f64);
+                        depth_metadata.as_ref().is_some_and(|m| {
+                            scale.is_some_and(|s| m.depth_scale_mm != Some(s as f32))
+                        }) || [
+                            ("color", color_metadata.as_ref()),
+                            ("depth", depth_metadata.as_ref()),
+                        ]
+                        .iter()
+                        .any(|(stream, m)| {
+                            m.is_some_and(|m| {
+                                snapshot
+                                    .content
+                                    .calibration
+                                    .models
+                                    .get(*stream)
+                                    .is_some_and(|expected| {
+                                        (expected.width, expected.height) != (m.width, m.height)
+                                    })
+                            })
+                        })
+                    });
                     for (stream, frame, metadata, profile, format) in [
                         (
                             "color",
@@ -769,16 +1018,40 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
                                 (c.system_timestamp_us, d.system_timestamp_us)
                             }
                         };
+                        if c.abs_diff(d) > config.capture.policy.max_delta_us {
+                            quality.diagnostic(quality_core::DiagnosticKind::PairSkew)?;
+                        }
                         quality
                             .engine
                             .observe_pair_delta(quality.at(Instant::now()), c.abs_diff(d))
                             .map_err(anyhow::Error::msg)?;
                     }
                 }
-                if color.is_none() || depth.is_none() {
+                if let Some((missing_reason, missing_kind)) =
+                    missing_streams(color.is_some(), depth.is_some())
+                {
                     metrics.missing += 1;
-                    metrics.reject("MISSING_FRAME");
+                    metrics.reject(missing_reason);
+                    if !startup {
+                        if let Some(raw) = &mut status.raw {
+                            raw.observe_excluded(false);
+                            if raw.active() {
+                                raw.fail(missing_reason);
+                            }
+                        }
+                    }
                     if let Some(quality) = &mut status.quality {
+                        quality.diagnostic(missing_kind)?;
+                        if let Some(frame) = depth.as_ref() {
+                            match measure_sdk_depth(frame) {
+                                Ok(stats) => quality.pixels(stats, None, true)?,
+                                Err(_) => {
+                                    quality.diagnostic(
+                                        quality_core::DiagnosticKind::PixelPayloadInvalid,
+                                    )?;
+                                }
+                            }
+                        }
                         quality.evaluate(
                             quality_core::FrameViolation::FrameContractInvalid,
                             quality_core::Condition::Violated,
@@ -786,12 +1059,7 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
                     }
                     consecutive = 0;
                     if !startup {
-                        status.write(
-                            "degraded",
-                            Some("PAIR_CONTRACT_REJECTED"),
-                            &metrics,
-                            last_pair,
-                        )?;
+                        status.write("degraded", Some(missing_reason), &metrics, last_pair)?;
                     }
                     continue;
                 }
@@ -803,6 +1071,97 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
                         output.aux.set_session_id(&status.session)?;
                     }
                 }
+                if status.raw.is_some()
+                    && bound_guard.is_none()
+                    && config.capture.quality_policy.is_some()
+                    && color_metadata.as_ref().is_some_and(|m| {
+                        m.format == orbbec_safe::Format::Yuyv
+                            && (m.width, m.height)
+                                == (
+                                    config.capture.color.profile.width,
+                                    config.capture.color.profile.height,
+                                )
+                    })
+                    && depth_metadata.as_ref().is_some_and(|m| {
+                        m.format == orbbec_safe::Format::Depth16
+                            && (m.width, m.height)
+                                == (
+                                    config.capture.depth.profile.width,
+                                    config.capture.depth.profile.height,
+                                )
+                            && m.depth_scale_mm.is_some_and(|v| v.is_finite() && v > 0.)
+                    })
+                {
+                    let instance = std::env::var("GDP_CAPTURE_INSTANCE_ID")
+                        .context("explicit runtime instance required for pair evidence")?;
+                    let snapshot = crate::capture_snapshot::build(
+                        &config.capture,
+                        &set.calibration()?,
+                        crate::capture_snapshot::RuntimeBinding {
+                            generation: &config.settings.generation,
+                            session: &status.session,
+                            instance: &instance,
+                            runtime_sha: &config.hash,
+                            runtime_contract: config.runtime_contract.as_ref(),
+                        },
+                        depth_metadata
+                            .as_ref()
+                            .and_then(|m| m.depth_scale_mm)
+                            .context("depth scale required")?,
+                    )?;
+                    let directory = config
+                        .settings
+                        .status_path
+                        .parent()
+                        .context("status directory")?
+                        .join("snapshots");
+                    let store = capture_contract::store::SnapshotStore::open(&directory)?;
+                    let id = store.publish(&snapshot)?;
+                    status.snapshot = Some((
+                        id.to_string(),
+                        directory
+                            .join(format!("{id}.json"))
+                            .to_string_lossy()
+                            .into(),
+                    ));
+                    if let Some(quality) = &mut status.quality {
+                        quality.bind(&snapshot)?;
+                    }
+                    if let Some(raw) = &mut status.raw {
+                        if raw
+                            .initialize(
+                                &snapshot,
+                                status.started,
+                                depth_metadata
+                                    .as_ref()
+                                    .and_then(|m| m.depth_scale_mm)
+                                    .context("raw source scale")?,
+                            )
+                            .is_err()
+                        {
+                            raw.fail("RAW_INITIALIZATION_FAILED");
+                        }
+                    }
+                    bound_guard = Some(frame_core::BoundPairGuard::new(snapshot, status.started)?);
+                }
+                if !startup {
+                    if let Some(raw) = &mut status.raw {
+                        raw.observe_excluded(false);
+                        if raw
+                            .capture(
+                                color.as_ref().context("color frame")?,
+                                depth.as_ref().context("depth frame")?,
+                                sequence,
+                                received,
+                                config.capture.policy,
+                            )
+                            .is_err()
+                        {
+                            raw.fail("RAW_NATIVE_PAIR_REJECTED");
+                        }
+                    }
+                }
+                status.observe_raw_quality()?;
                 let packets = (|| -> Result<_> {
                     Ok((
                         rgbd::packet(
@@ -813,21 +1172,31 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
                             received,
                             &mut metrics,
                         )?,
-                        rgbd::packet(
+                        rgbd::packet_measured(
                             depth.unwrap(),
                             &config.capture.depth,
                             true,
                             config.capture.normalize,
                             received,
                             &mut metrics,
+                            status.quality.is_some(),
                         )?,
                     ))
                 })();
                 let (color, depth) = match packets {
-                    Ok(value) => value,
+                    Ok((color, measured)) => {
+                        if let Some(quality) = &mut status.quality {
+                            if let Some(source) = measured.source_pixels {
+                                quality.pixels(source, measured.output_pixels, true)?;
+                            }
+                        }
+                        (color, measured.packet)
+                    }
                     Err(_) => {
                         metrics.reject("FRAME_CONTRACT_REJECTED");
                         if let Some(quality) = &mut status.quality {
+                            quality
+                                .diagnostic(quality_core::DiagnosticKind::PixelPayloadInvalid)?;
                             quality.evaluate(
                                 quality_core::FrameViolation::FrameContractInvalid,
                                 quality_core::Condition::Violated,
@@ -916,11 +1285,14 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
                     Err(error) => {
                         if matches!(error, frame_core::PairError::SkewExceeded) {
                             metrics.skew += 1;
-                        } else {
+                        } else if pair_rejection(&error).1
+                            == quality_core::FrameViolation::TimestampRegression
+                        {
                             metrics.monotonic += 1;
                         }
-                        metrics.reject("PAIR_CONTRACT_REJECTED");
+                        metrics.reject(pair_rejection(&error).0);
                         if let Some(quality) = &mut status.quality {
+                            quality.diagnostic(quality_core::DiagnosticKind::PairRejected)?;
                             // Raw pair delta/progression were already observed once
                             // for this frameset; a guard rejection must not count a
                             // second observation or shorten configured hysteresis.
@@ -928,7 +1300,7 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
                                 && !quality.source_progress_invalid
                             {
                                 quality.evaluate(
-                                    quality_core::FrameViolation::TimestampRegression,
+                                    pair_rejection(&error).1,
                                     quality_core::Condition::Violated,
                                 )?;
                             }
@@ -967,6 +1339,9 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
                     enqueued_at: Instant::now(),
                 });
                 if let Some(quality) = &mut status.quality {
+                    if evicted.is_some() {
+                        quality.diagnostic(quality_core::DiagnosticKind::QueueOverflow)?;
+                    }
                     quality.evaluate(
                         quality_core::FrameViolation::QueueOverflow,
                         if evicted.is_some() {
@@ -1021,6 +1396,10 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
             "error_chain":detail,"details_truncated":truncated}),
         );
     }
+    if let Some(raw) = &mut status.raw {
+        raw.finish_session(outcome.is_ok())?;
+    }
+    status.observe_raw_quality()?;
     if let Some(quality) = &mut status.quality {
         if outcome.is_err() && quality.engine.snapshot().state == quality_core::QualityState::Normal
         {
@@ -1044,17 +1423,145 @@ fn signal_child(child: &Child, signal: libc::c_int) {
         libc::kill(-(child.id() as i32), signal);
     }
 }
+#[cfg(target_os = "linux")]
+fn adopt_worker_descendants() -> Result<()> {
+    // PID 1 already adopts orphans; standalone supervisors need the same local
+    // descendant ownership. This does not adopt unrelated host processes.
+    ensure!(
+        unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } == 0,
+        "worker subreaper setup failed"
+    );
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn reap_owned_group_descendants(
+    group: libc::pid_t,
+    leader: libc::pid_t,
+    timeout: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        let mut matching = false;
+        let mut pending = false;
+        // Linux may attach an adopted descendant to any live supervisor thread.
+        // Enumerate only our own direct children, never arbitrary /proc PIDs.
+        let mut children = std::collections::BTreeSet::new();
+        for task in fs::read_dir("/proc/self/task")? {
+            let path = task?.path().join("children");
+            let text = match fs::read_to_string(path) {
+                Ok(text) => text,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            for pid in text.split_whitespace() {
+                children.insert(pid.parse::<libc::pid_t>()?);
+            }
+        }
+        for pid in children {
+            if pid == leader || unsafe { libc::getpgid(pid) } != group {
+                continue;
+            }
+            matching = true;
+            let mut status = 0;
+            let result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if result == 0 {
+                pending = true;
+            }
+            if result < 0 {
+                pending = true;
+                let error = std::io::Error::last_os_error();
+                ensure!(
+                    matches!(error.raw_os_error(), Some(libc::ECHILD) | Some(libc::EINTR)),
+                    "owned descendant wait failed"
+                );
+            }
+        }
+        // The exited leader remains unreaped throughout the scan/cleanup. Its
+        // PID/PGID cannot be recycled into an unrelated process group.
+        if !matching {
+            return Ok(());
+        }
+        if !pending {
+            continue;
+        }
+        ensure!(
+            started.elapsed() < timeout,
+            "owned worker group cleanup deadline"
+        );
+        thread::sleep(Duration::from_millis(5).min(timeout.saturating_sub(started.elapsed())));
+    }
+}
+fn reap_worker_exit(
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<Option<std::process::ExitStatus>> {
+    #[cfg(target_os = "linux")]
+    {
+        let leader = libc::pid_t::try_from(child.id())?;
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child.id(),
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                return Ok(None);
+            }
+            return Err(error.into());
+        }
+        if unsafe { info.si_pid() } == 0 {
+            return Ok(None);
+        }
+        ensure!(
+            unsafe { info.si_pid() } == leader && unsafe { libc::getpgid(leader) } == leader,
+            "worker process group ownership changed"
+        );
+        let killed = unsafe { libc::kill(-leader, libc::SIGKILL) };
+        if killed < 0 {
+            ensure!(
+                std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH),
+                "owned worker group kill failed"
+            )
+        }
+        reap_owned_group_descendants(leader, leader, timeout)?;
+        // Reap the anchor only after all adopted same-group descendants are gone.
+        Ok(Some(child.wait()?))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = timeout;
+        Ok(child.try_wait()?)
+    }
+}
 fn terminate(child: &mut Child, timeout: Duration) -> Result<()> {
     signal_child(child, libc::SIGTERM);
     let started = Instant::now();
-    while child.try_wait()?.is_none() && started.elapsed() < timeout {
-        thread::sleep(Duration::from_millis(25));
+    loop {
+        if reap_worker_exit(child, timeout.saturating_sub(started.elapsed()))?.is_some() {
+            return Ok(());
+        }
+        if started.elapsed() >= timeout {
+            signal_child(child, libc::SIGKILL);
+            // Wait observation remains non-reaping so group ownership stays
+            // anchored even when SIGTERM/SIGKILL race with normal worker exit.
+            let killed_at = Instant::now();
+            loop {
+                if reap_worker_exit(child, timeout.saturating_sub(killed_at.elapsed()))?.is_some() {
+                    return Ok(());
+                }
+                ensure!(killed_at.elapsed() < timeout, "killed worker exit deadline");
+                thread::sleep(
+                    Duration::from_millis(5).min(timeout.saturating_sub(killed_at.elapsed())),
+                );
+            }
+        }
+        thread::sleep(Duration::from_millis(25).min(timeout.saturating_sub(started.elapsed())));
     }
-    if child.try_wait()?.is_none() {
-        signal_child(child, libc::SIGKILL);
-        child.wait()?;
-    }
-    Ok(())
 }
 fn wait_interruptible(duration: Duration) {
     let start = Instant::now();
@@ -1126,6 +1633,8 @@ fn acknowledge_recording(config: &ServiceConfig, worker_pid: u32) {
     let _ = operation;
 }
 fn supervisor(config: &ServiceConfig, path: &Path) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    adopt_worker_descendants()?;
     let parent = config
         .settings
         .status_path
@@ -1195,7 +1704,10 @@ fn supervisor(config: &ServiceConfig, path: &Path) -> Result<()> {
                 )?;
                 break "SIGNAL";
             }
-            if let Some(exit) = child.try_wait()? {
+            if let Some(exit) = reap_worker_exit(
+                &mut child,
+                Duration::from_millis(config.settings.shutdown_timeout_ms),
+            )? {
                 break if exit.success() {
                     "WORKER_STOPPED"
                 } else {
@@ -1559,6 +2071,152 @@ mod tests {
     }
 
     #[test]
+    fn runtime_pixels_are_numerical_raw_counts_once_and_scale_changes_are_not_timestamp_faults() {
+        let directory =
+            std::env::temp_dir().join(format!("quality-pixels-{}", random_session().unwrap()));
+        let session = "a".repeat(32);
+        let instance = "b".repeat(64);
+        let mut policy = runtime_policy();
+        policy.quality.min_valid_fraction = 0.75;
+        policy.quality.max_zero_fraction = 0.25;
+        let mut content = quality_snapshot(&session, &instance).content;
+        content.quality_policy = policy.quality.clone();
+        content.configuration["source_depth_scale_mm"] = json!(0.1f32);
+        content.binding.configuration_id = capture_contract::ConfigurationId::parse(
+            capture_contract::content_digest(
+                capture_contract::ContentKind::Configuration,
+                &serde_json::to_vec(&content.configuration).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let snapshot = content.seal().unwrap();
+        let mut q = ServiceQuality::new(
+            policy,
+            &session,
+            &instance,
+            Instant::now(),
+            &directory.join("status.json"),
+        )
+        .unwrap();
+        q.bind(&snapshot).unwrap();
+        let mut m = orbbec_safe::FrameMetadata {
+            format: orbbec_safe::Format::Depth16,
+            width: 2,
+            height: 1,
+            index: 5,
+            timestamp_us: 50,
+            system_timestamp_us: 1_000_000,
+            data_size: 4,
+            depth_scale_mm: Some(0.1),
+        };
+        q.receipt("depth", Some(&m), Instant::now(), Some(1_000_000_000), true)
+            .unwrap();
+        let layout = frame_core::FrameLayout {
+            width: 2,
+            height: 1,
+            stride: 4,
+            format: frame_core::PixelFormat::Depth16,
+        };
+        let raw = [0, 0, 255, 255];
+        let normalized = frame_core::normalize_depth_mm(&raw, layout, false, 0.1).unwrap();
+        q.pixels(
+            normalized.stats.source_samples(),
+            Some(normalized.stats.output_samples()),
+            true,
+        )
+        .unwrap();
+        let state = q.engine.snapshot();
+        assert_eq!(state.streams["depth"].frame_count, 1);
+        assert_eq!(q.receipts["depth"], 1);
+        assert_eq!(
+            state.streams["depth"].window_metrics.valid_fraction,
+            Some(0.5)
+        );
+        assert_eq!(
+            state.streams["depth"].window_metrics.max_u16_fraction,
+            Some(0.5)
+        );
+        assert!(
+            state
+                .active_episodes
+                .iter()
+                .any(|e| e.violation == quality_core::FrameViolation::FrameContractInvalid)
+        );
+        assert_eq!(
+            q.last_observed["depth"]["pixel_measurement"]["source_payload"]["max_u16_samples"],
+            1
+        );
+        assert_eq!(
+            q.last_observed["depth"]["pixel_measurement"]["output_payload"]["max_u16_samples"],
+            0
+        );
+        assert_eq!(raw, [0, 0, 255, 255]);
+        m.depth_scale_mm = Some(0.2);
+        m.index = 1;
+        m.timestamp_us = 1;
+        m.system_timestamp_us = 1;
+        q.receipt("depth", Some(&m), Instant::now(), Some(2_000), true)
+            .unwrap();
+        let state = q.engine.snapshot();
+        assert_eq!(
+            state.diagnostics.session_counts[&quality_core::DiagnosticKind::DepthScaleChanged],
+            1
+        );
+        assert!(
+            !state
+                .active_episodes
+                .iter()
+                .any(|e| e.violation == quality_core::FrameViolation::TimestampRegression)
+        );
+        assert_eq!(
+            pair_rejection(&frame_core::PairError::InvalidPolicy).1,
+            quality_core::FrameViolation::FrameContractInvalid
+        );
+        assert_eq!(q.receipts["depth"], 2);
+        assert_eq!(q.receipts["color"], 0);
+        assert!(state.streams["color"].window_metrics.depth_pixels.is_none());
+    }
+    #[test]
+    fn absent_stream_causes_are_stable_and_do_not_fabricate_other_route_frames() {
+        assert_eq!(
+            missing_streams(false, true),
+            Some(("MISSING_COLOR", quality_core::DiagnosticKind::MissingColor))
+        );
+        assert_eq!(
+            missing_streams(true, false),
+            Some(("MISSING_DEPTH", quality_core::DiagnosticKind::MissingDepth))
+        );
+        assert_eq!(
+            missing_streams(false, false),
+            Some(("MISSING_BOTH", quality_core::DiagnosticKind::MissingBoth))
+        );
+        assert_eq!(missing_streams(true, true), None);
+    }
+    #[test]
+    fn raw_recording_is_opt_in_requires_quality_and_keeps_configuration_content() {
+        let mut value = config();
+        assert!(
+            ServiceConfig::parse(&value.to_string())
+                .unwrap()
+                .raw_settings
+                .is_none()
+        );
+        value["raw_recording"] = json!({"directory":"/private/native","name":"capture","queue_capacity":2,"max_pairs":30,"max_bytes":1_000_000});
+        assert!(ServiceConfig::parse(&value.to_string()).is_err());
+        let policy = runtime_policy();
+        value["quality_policy"] = serde_json::to_value(&policy.quality).unwrap();
+        value["quality_runtime"] = serde_json::to_value(policy).unwrap();
+        let parsed = ServiceConfig::parse(&value.to_string()).unwrap();
+        assert!(parsed.raw_settings.is_some());
+        assert_eq!(
+            parsed.capture.configuration["raw_recording"],
+            value["raw_recording"]
+        );
+        value["raw_recording"]["max_pairs"] = json!(0);
+        assert!(ServiceConfig::parse(&value.to_string()).is_err());
+    }
+    #[test]
     fn service_config_requires_explicit_bounded_policy() {
         let mut value = config();
         assert!(ServiceConfig::parse(&value.to_string()).is_ok());
@@ -1631,6 +2289,7 @@ mod tests {
             restarts: 0,
             last_failure: None,
             quality: None,
+            raw: None,
         };
         status
             .write(
@@ -1662,6 +2321,40 @@ mod tests {
             0o600
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn group_ownership_mismatch_is_rejected_before_reaping_or_signalling_other_group() {
+        let mut control = Command::new("sleep")
+            .arg("10")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut worker = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .process_group(control.id() as i32)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match reap_worker_exit(&mut worker, Duration::from_millis(100)) {
+                Ok(None) => {
+                    assert!(Instant::now() < deadline);
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break,
+                Ok(Some(_)) => {
+                    panic!("foreign group must not be reaped through supervised cleanup")
+                }
+            }
+        }
+        assert!(control.try_wait().unwrap().is_none());
+        assert!(
+            worker.wait().unwrap().success(),
+            "WNOWAIT must preserve the rejected leader for its real owner"
+        );
+        control.kill().unwrap();
+        control.wait().unwrap();
     }
     #[test]
     fn native_process_is_killed_when_graceful_deadline_expires() {

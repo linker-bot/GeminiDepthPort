@@ -1,0 +1,485 @@
+mod support;
+use capture_contract::*;
+use capture_observer::*;
+use offline_depth::{StorageEndian, recording::*, sha256};
+use std::{fs, path::Path};
+use support::*;
+fn reference(root: &Path, name: &str, bytes: &[u8]) -> FileRef {
+    fs::write(root.join(name), bytes).unwrap();
+    FileRef {
+        path: name.into(),
+        sha256: sha256(bytes),
+    }
+}
+fn index(root: &Path, record: &RecordingRecord) {
+    let line = serde_json::to_vec(record).unwrap();
+    let snapshot: snapshot::SnapshotEnvelope =
+        serde_json::from_slice(&fs::read(root.join("snapshot.json")).unwrap()).unwrap();
+    fs::write(root.join("records.jsonl"), &line).unwrap();
+    let manifest = RecordingManifest {
+        version: 2,
+        source_kind: "recording-directory-v2".into(),
+        snapshot: "snapshot.json".into(),
+        binding: snapshot.content.binding,
+        records: "records.jsonl".into(),
+        records_sha256: sha256(&line),
+        record_count: 1,
+    };
+    fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+fn fixture_v2(root: &Path, observed: bool, counts: bool) -> RecordingRecord {
+    let legacy = fixture(root, counts, 0.);
+    let mut pair: frame_core::BoundPairEvidence =
+        serde_json::from_slice(&fs::read(root.join("pair.json")).unwrap()).unwrap();
+    let make = |stream: &str| StoredImage {
+        file: if stream == "depth" {
+            FileRef {
+                path: "depth.raw16".into(),
+                sha256: legacy.pairs[0].depth_sha256.clone(),
+            }
+        } else {
+            reference(root, "color.raw", &[1, 2, 3, 4])
+        },
+        topic: None,
+        record_timestamp_ns: None,
+        header_timestamp_ns: None,
+        frame_id: stream.into(),
+        width: 2,
+        height: 1,
+        stride: 4,
+        encoding: if stream == "depth" { "depth16" } else { "yuyv" }.into(),
+        endian: StorageEndian::Little,
+        camera_info: None,
+        metadata: None,
+    };
+    let mut color = make("color");
+    let mut depth = make("depth");
+    let evidence = if observed {
+        let frame = |context: &mut FrameContext, id| {
+            context.sequence = None;
+            context.device_timestamp_us = None;
+            context.system_timestamp_us = None;
+            ObservedFrame {
+                observation_sequence: id,
+                context: context.clone(),
+                observed_header_ns: 1_000_000_000,
+                mapped_unix_ns: 1_000_000_000,
+                metadata_provenance: MetadataProvenance::Unobserved,
+                reported_source_session: None,
+                camera_info_observation_sequence: None,
+                metadata_observation_sequence: None,
+            }
+        };
+        let c = frame(&mut pair.color.context, 1);
+        let d = frame(&mut pair.depth.context, 2);
+        for image in [&mut color, &mut depth] {
+            image.topic = Some(format!("/synthetic/{}", image.frame_id));
+            image.record_timestamp_ns = Some(1_000_000_001);
+            image.header_timestamp_ns = Some(1_000_000_000);
+            let info = DecodedCameraInfo {
+                stamp: HeaderStamp { sec: 1, nanosec: 0 },
+                frame_id: image.frame_id.clone(),
+                width: 2,
+                height: 1,
+                distortion_model: "".into(),
+                k: [1., 0., 0., 0., 1., 0., 0., 0., 1.],
+                d: vec![],
+                r: [1., 0., 0., 0., 1., 0., 0., 0., 1.],
+                p: [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.],
+                binning: [0; 2],
+                roi: [0; 4],
+                roi_do_rectify: false,
+            };
+            image.camera_info = Some(reference(
+                root,
+                &format!("{}-info.json", image.frame_id),
+                &serde_json::to_vec(&info).unwrap(),
+            ));
+        }
+        depth.encoding = "16UC1".into();
+        TaggedEvidence::ObservedAssociation {
+            association: ObservedAssociation {
+                version: 1,
+                association_sequence: 1,
+                provenance: PairingProvenance::ObservedTimestamp,
+                color: c,
+                depth: d,
+                delta_ns: 0,
+                same_sdk_frameset: None,
+                hardware_sync_verified: false,
+            },
+            header_mapping: quality_core::ClockMapper::DeclaredObservedUnixHeader,
+        }
+    } else {
+        TaggedEvidence::SdkBoundPair {
+            pair,
+            source_json: None,
+        }
+    };
+    let e = reference(root, "tagged.json", &serde_json::to_vec(&evidence).unwrap());
+    let record = RecordingRecord {
+        sequence: 1,
+        evidence: e,
+        color,
+        depth,
+        storage_representation: legacy.pairs[0].storage_representation.clone(),
+    };
+    index(root, &record);
+    record
+}
+#[test]
+fn sdk_counts_original_cli_preserves_exact_integer_samples_and_scale() {
+    let input = tempfile::tempdir().unwrap();
+    fixture(input.path(), true, 0.);
+    let output = tempfile::tempdir().unwrap();
+    let result = cli(
+        input.path(),
+        &[
+            "--preserve-counts",
+            "--output",
+            output.path().to_str().unwrap(),
+            "--job",
+            "counts",
+        ],
+    );
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(
+        decoded(&output.path().join("counts/frames/00000000000000000000.png")),
+        [10000, 0]
+    );
+    let record = fs::read_to_string(output.path().join("counts/manifest.jsonl")).unwrap();
+    // Numeric samples and evidence remain exact; no ROS millimetre reverse conversion.
+    assert!(record.contains("original_sdk_counts"));
+    assert!(record.contains("sdk-counts"));
+}
+#[test]
+fn both_v2_sources_use_actual_cli_without_fabricating_sdk_provenance() {
+    for observed in [false, true] {
+        let input = tempfile::tempdir().unwrap();
+        fixture_v2(input.path(), observed, false);
+        let output = tempfile::tempdir().unwrap();
+        let result = cli(
+            input.path(),
+            &[
+                "--recording-v2",
+                "--output",
+                output.path().to_str().unwrap(),
+                "--job",
+                "export",
+            ],
+        );
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            decoded(&output.path().join("export/frames/00000000000000000000.png")),
+            [1000, 0]
+        );
+        let evidence = fs::read_to_string(
+            output
+                .path()
+                .join("export/pair-evidence-00000000000000000001.json"),
+        )
+        .unwrap();
+        assert_eq!(evidence.contains("observed-association"), observed);
+        assert_eq!(
+            evidence.contains("\"association\":\"sdk_frameset\""),
+            !observed
+        );
+        assert!(output.path().join("export/COMPLETE").is_file());
+    }
+}
+#[test]
+fn v2_counts_supported_but_ros_millimetres_cannot_recover_counts() {
+    let input = tempfile::tempdir().unwrap();
+    fixture_v2(input.path(), false, true);
+    assert!(
+        cli(
+            input.path(),
+            &["--recording-v2", "--validate-only", "--preserve-counts"]
+        )
+        .status
+        .success()
+    );
+    let input = tempfile::tempdir().unwrap();
+    fixture_v2(input.path(), true, true);
+    let result = cli(
+        input.path(),
+        &["--recording-v2", "--validate-only", "--preserve-counts"],
+    );
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stdout).contains("OBSERVED_COUNTS_UNRECOVERABLE"));
+}
+#[test]
+fn independent_pixel_info_identity_and_header_bindings_are_enforced() {
+    for mode in 0..5 {
+        let input = tempfile::tempdir().unwrap();
+        let mut record = fixture_v2(input.path(), true, false);
+        match mode {
+            0 => {
+                fs::write(input.path().join("color.raw"), [9, 9, 9, 9]).unwrap();
+            }
+            1 => {
+                record.depth.header_timestamp_ns = Some(1_000_000_001);
+            }
+            2 => {
+                record.depth.frame_id = "other".into();
+            }
+            3 => {
+                let mut value: serde_json::Value = serde_json::from_slice(
+                    &fs::read(input.path().join("depth-info.json")).unwrap(),
+                )
+                .unwrap();
+                value["k"][0] = serde_json::json!(2.);
+                record.depth.camera_info = Some(reference(
+                    input.path(),
+                    "wrong-info.json",
+                    &serde_json::to_vec(&value).unwrap(),
+                ));
+            }
+            _ => {
+                let mut evidence: TaggedEvidence =
+                    serde_json::from_slice(&fs::read(input.path().join("tagged.json")).unwrap())
+                        .unwrap();
+                if let TaggedEvidence::ObservedAssociation { association, .. } = &mut evidence {
+                    association.depth.context.sequence = Some(4);
+                }
+                record.evidence = reference(
+                    input.path(),
+                    "wrong-tagged.json",
+                    &serde_json::to_vec(&evidence).unwrap(),
+                );
+            }
+        }
+        index(input.path(), &record);
+        assert!(
+            !cli(input.path(), &["--recording-v2", "--validate-only"])
+                .status
+                .success(),
+            "mode {mode}"
+        );
+    }
+}
+#[test]
+fn truncated_or_digest_mismatched_index_never_marks_job_complete() {
+    let input = tempfile::tempdir().unwrap();
+    fixture_v2(input.path(), true, false);
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(input.path().join("records.jsonl"))
+        .unwrap();
+    use std::io::Write;
+    file.write_all(b"\n").unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let result = cli(
+        input.path(),
+        &[
+            "--recording-v2",
+            "--output",
+            output.path().to_str().unwrap(),
+            "--job",
+            "bad",
+        ],
+    );
+    assert!(!result.status.success());
+    assert!(!output.path().join("bad/COMPLETE").exists());
+    assert!(output.path().join("bad.partial").exists());
+}
+
+#[test]
+fn native_writer_commits_original_counts_and_drop_records_interruption() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    fixture(fixture_dir.path(), true, 0.);
+    let snapshot: snapshot::SnapshotEnvelope =
+        serde_json::from_slice(&fs::read(fixture_dir.path().join("snapshot.json")).unwrap())
+            .unwrap();
+    let pair: frame_core::BoundPairEvidence =
+        serde_json::from_slice(&fs::read(fixture_dir.path().join("pair.json")).unwrap()).unwrap();
+    let pixels = fs::read(fixture_dir.path().join("depth.raw16")).unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let mut writer = RawRecordingWriter::begin(output.path(), "native", snapshot.clone()).unwrap();
+    writer
+        .append(&pair, &[1, 2, 3, 4], &pixels, StorageEndian::Little)
+        .unwrap();
+    let path = writer.finish().unwrap();
+    assert!(path.join("COMPLETE").exists());
+    assert!(
+        cli(
+            &path,
+            &["--recording-v2", "--validate-only", "--preserve-counts"]
+        )
+        .status
+        .success()
+    );
+    let mut writer = RawRecordingWriter::begin(output.path(), "interrupted", snapshot).unwrap();
+    assert!(
+        writer
+            .append(&pair, &[1], &pixels, StorageEndian::Little)
+            .is_err()
+    );
+    drop(writer);
+    assert!(!output.path().join("interrupted").exists());
+    assert!(
+        output
+            .path()
+            .join("interrupted.partial/INTERRUPTED.json")
+            .exists()
+    );
+}
+
+#[test]
+fn native_writer_cannot_replace_racing_target_and_enforces_actual_byte_budget() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    fixture(fixture_dir.path(), true, 0.);
+    let snapshot: snapshot::SnapshotEnvelope =
+        serde_json::from_slice(&fs::read(fixture_dir.path().join("snapshot.json")).unwrap())
+            .unwrap();
+    let pair: frame_core::BoundPairEvidence =
+        serde_json::from_slice(&fs::read(fixture_dir.path().join("pair.json")).unwrap()).unwrap();
+    let pixels = fs::read(fixture_dir.path().join("depth.raw16")).unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let mut writer = RawRecordingWriter::begin(output.path(), "race", snapshot.clone()).unwrap();
+    writer
+        .append(&pair, &[1, 2, 3, 4], &pixels, StorageEndian::Little)
+        .unwrap();
+    fs::create_dir(output.path().join("race")).unwrap();
+    assert!(writer.finish().is_err());
+    assert!(output.path().join("race").is_dir());
+    assert_eq!(fs::read_dir(output.path().join("race")).unwrap().count(), 0);
+    assert!(!output.path().join("race.partial/COMPLETE").exists());
+    let mut good = RawRecordingWriter::begin(output.path(), "good", snapshot.clone()).unwrap();
+    good.append(&pair, &[1, 2, 3, 4], &pixels, StorageEndian::Little)
+        .unwrap();
+    let path = good.finish().unwrap();
+    let total: u64 = fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().metadata().unwrap().len())
+        .sum();
+    let mut limited =
+        RawRecordingWriter::begin_with_limit(output.path(), "limit", snapshot, total - 1).unwrap();
+    limited
+        .append(&pair, &[1, 2, 3, 4], &pixels, StorageEndian::Little)
+        .unwrap();
+    assert!(limited.finish().is_err());
+    assert!(!output.path().join("limit/COMPLETE").exists());
+    let used: u64 = fs::read_dir(output.path().join("limit.partial"))
+        .unwrap()
+        .map(|entry| entry.unwrap().metadata().unwrap().len())
+        .sum();
+    assert!(used < total);
+}
+
+#[test]
+fn final_commit_gate_can_refuse_after_disk_validation_without_complete() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    fixture(fixture_dir.path(), true, 0.);
+    let snapshot: snapshot::SnapshotEnvelope =
+        serde_json::from_slice(&fs::read(fixture_dir.path().join("snapshot.json")).unwrap())
+            .unwrap();
+    let pair: frame_core::BoundPairEvidence =
+        serde_json::from_slice(&fs::read(fixture_dir.path().join("pair.json")).unwrap()).unwrap();
+    let pixels = fs::read(fixture_dir.path().join("depth.raw16")).unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let mut writer = RawRecordingWriter::begin(output.path(), "aborted", snapshot).unwrap();
+    writer
+        .append(&pair, &[1, 2, 3, 4], &pixels, StorageEndian::Little)
+        .unwrap();
+    let called = std::cell::Cell::new(false);
+    let result = writer.finish_guarded(|| -> offline_depth::Result<()> {
+        called.set(true);
+        Err(offline_depth::OfflineError::Invalid(
+            "APPLICATION_RECORDING_ABORTED",
+        ))
+    });
+    assert!(called.get());
+    assert!(result.is_err());
+    assert!(!output.path().join("aborted").exists());
+    assert!(!output.path().join("aborted.partial/COMPLETE").exists());
+    assert!(
+        output
+            .path()
+            .join("aborted.partial/INTERRUPTED.json")
+            .exists()
+    );
+}
+
+#[test]
+fn native_recording_persists_and_exports_independently_verified_ros_snapshot_link() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    fixture(fixture_dir.path(), true, 0.);
+    let native: snapshot::SnapshotEnvelope =
+        serde_json::from_slice(&fs::read(fixture_dir.path().join("snapshot.json")).unwrap())
+            .unwrap();
+    let mut ros_content = native.content.clone();
+    ros_content.depth = DepthRepresentation::Millimetres {
+        quantization: QuantizationPolicy::NearestHalfUpPreserveZeroClampPositiveRejectOverflow,
+    };
+    let ros = ros_content.seal().unwrap();
+    let pair: frame_core::BoundPairEvidence =
+        serde_json::from_slice(&fs::read(fixture_dir.path().join("pair.json")).unwrap()).unwrap();
+    let pixels = fs::read(fixture_dir.path().join("depth.raw16")).unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let mut writer =
+        RawRecordingWriter::begin_with_limit(output.path(), "linked", native.clone(), 100000)
+            .unwrap();
+    writer.attach_ros_snapshot(&ros).unwrap();
+    writer
+        .append(&pair, &[1, 2, 3, 4], &pixels, StorageEndian::Little)
+        .unwrap();
+    let path = writer.finish().unwrap();
+    let link: SnapshotAssociation =
+        serde_json::from_slice(&fs::read(path.join("snapshot-association.json")).unwrap()).unwrap();
+    assert_eq!(link.native_snapshot_id, native.snapshot_id);
+    assert_eq!(link.ros_snapshot_id, ros.snapshot_id);
+    let export = tempfile::tempdir().unwrap();
+    assert!(
+        cli(
+            &path,
+            &[
+                "--recording-v2",
+                "--preserve-counts",
+                "--output",
+                export.path().to_str().unwrap(),
+                "--job",
+                "export"
+            ]
+        )
+        .status
+        .success()
+    );
+    let copy = export
+        .path()
+        .join("export/source-blobs")
+        .join(sha256(&ros.to_bytes().unwrap()));
+    assert_eq!(fs::read(copy).unwrap(), ros.to_bytes().unwrap());
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(path.join("snapshot-association.json")).unwrap()).unwrap();
+    value["ros_snapshot_id"] = serde_json::json!("f".repeat(64));
+    fs::write(
+        path.join("snapshot-association.json"),
+        serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+    assert!(RecordingDirectorySource::open(&path).is_err());
+    let mut limited = RawRecordingWriter::begin_with_limit(
+        output.path(),
+        "link-budget",
+        native.clone(),
+        native.to_bytes().unwrap().len() as u64 + 10,
+    )
+    .unwrap();
+    assert!(limited.attach_ros_snapshot(&ros).is_err());
+    assert!(
+        limited
+            .append(&pair, &[1, 2, 3, 4], &pixels, StorageEndian::Little)
+            .is_err()
+    );
+    drop(limited);
+    let mut late = RawRecordingWriter::begin(output.path(), "late-link", native).unwrap();
+    late.append(&pair, &[1, 2, 3, 4], &pixels, StorageEndian::Little)
+        .unwrap();
+    assert!(late.attach_ros_snapshot(&ros).is_err());
+    assert!(late.finish().is_err());
+}

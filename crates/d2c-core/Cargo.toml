@@ -7,3 +7,7 @@ license = "Apache-2.0"
 description = "Deterministic scalar offline depth-to-color geometry"
 
 [dependencies]
+
+[dev-dependencies]
+capture-contract = { path = "../capture-contract" }
+serde_json = "1"

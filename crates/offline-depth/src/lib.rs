@@ -1,4 +1,5 @@
 //! Offline directory source; no acquisition, ROS, SDK, recording gate, or clock.
+pub mod recording;
 use capture_contract::{
     FrameContext,
     snapshot::{SnapshotBinding, SnapshotEnvelope},
@@ -353,6 +354,7 @@ fn representation_scale(representation: &capture_contract::DepthRepresentation) 
 #[derive(Debug, Clone, Copy)]
 pub enum Operation {
     Original { normalize_mm: bool },
+    PreserveCounts,
     DepthToColor,
 }
 #[derive(Debug, Clone, Copy)]
@@ -507,8 +509,61 @@ fn convert(
     e.validate()
         .map_err(|_| OfflineError::Invalid("PAIR_EVIDENCE_INVALID"))?;
     validate_binding(snapshot, e)?;
-    let scale = representation_scale(&snapshot.content.depth);
+    convert_material(
+        &frame.depth,
+        frame.endian,
+        &e.depth.context,
+        e.depth.width,
+        e.depth.height,
+        e.depth.stride,
+        e.pair_sequence,
+        &frame.evidence_sha256,
+        &snapshot.content.depth,
+        operation,
+        geometry,
+        ordinal,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn convert_material(
+    depth: &[u8],
+    endian: StorageEndian,
+    context: &FrameContext,
+    source_width: u32,
+    source_height: u32,
+    source_stride: usize,
+    sequence: u64,
+    evidence_sha256: &str,
+    representation: &capture_contract::DepthRepresentation,
+    operation: Operation,
+    geometry: &mut Option<Geometry>,
+    ordinal: u64,
+) -> Result<(depth_output::EncodedDepth, bool)> {
+    let scale = representation_scale(representation);
     let (bytes, width, height, kind, normalized) = match operation {
+        Operation::PreserveCounts => {
+            require(
+                matches!(
+                    representation,
+                    capture_contract::DepthRepresentation::SdkCounts { .. }
+                ),
+                "COUNTS_SOURCE_REQUIRED",
+            )?;
+            (
+                normalize(
+                    depth,
+                    source_width,
+                    source_height,
+                    source_stride,
+                    endian,
+                    1.,
+                )?,
+                source_width,
+                source_height,
+                depth_output::DepthKind::OriginalSdkCounts { scale_mm: scale },
+                false,
+            )
+        }
         Operation::Original { normalize_mm } => {
             require(
                 scale == 1. || normalize_mm,
@@ -516,15 +571,15 @@ fn convert(
             )?;
             (
                 normalize(
-                    &frame.depth,
-                    e.depth.width,
-                    e.depth.height,
-                    e.depth.stride,
-                    frame.endian,
+                    depth,
+                    source_width,
+                    source_height,
+                    source_stride,
+                    endian,
                     scale,
                 )?,
-                e.depth.width,
-                e.depth.height,
+                source_width,
+                source_height,
                 depth_output::DepthKind::OriginalMillimetres,
                 scale != 1.,
             )
@@ -534,11 +589,11 @@ fn convert(
                 .as_mut()
                 .ok_or(OfflineError::Invalid("D2C_GEOMETRY_MISSING"))?;
             let raw = d2c_core::RawDepthView::new(
-                &frame.depth,
-                e.depth.width,
-                e.depth.height,
-                e.depth.stride,
-                match frame.endian {
+                depth,
+                source_width,
+                source_height,
+                source_stride,
+                match endian {
                     StorageEndian::Little => d2c_core::Endian::Little,
                     StorageEndian::Big => d2c_core::Endian::Big,
                 },
@@ -559,10 +614,10 @@ fn convert(
     };
     let record = depth_output::FrameRecord {
         ordinal,
-        context: e.depth.context.clone(),
+        context: context.clone(),
         kind,
-        pair_sequence: e.pair_sequence,
-        pair_evidence_sha256: frame.evidence_sha256,
+        pair_sequence: sequence,
+        pair_evidence_sha256: evidence_sha256.to_owned(),
     };
     Ok((
         depth_output::encode(

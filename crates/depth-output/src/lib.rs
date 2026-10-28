@@ -87,6 +87,10 @@ impl DepthView<'_> {
 #[serde(rename_all = "snake_case")]
 pub enum DepthKind {
     OriginalMillimetres,
+    /// Exact integer samples, with an explicit millimetres-per-count scale.
+    OriginalSdkCounts {
+        scale_mm: f64,
+    },
     D2cColorZMillimetres,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -103,6 +107,10 @@ impl FrameRecord {
         self.context
             .validate()
             .map_err(|_| OutputError::Invalid("FRAME_CONTEXT"))?;
+        if matches!(self.kind, DepthKind::OriginalSdkCounts { scale_mm } if !scale_mm.is_finite() || scale_mm <= 0.)
+        {
+            return Err(OutputError::Invalid("DEPTH_SCALE"));
+        }
         if self.pair_sequence == 0
             || self.pair_evidence_sha256.len() != 64
             || !self
@@ -302,13 +310,21 @@ impl Job {
             return Err(OutputError::Invalid("JOB_FAILED"));
         }
         let result = (|| {
+            let recording_name = name
+                .strip_prefix("recording-record-")
+                .and_then(|s| s.strip_suffix(".json"))
+                .is_some_and(|s| s.len() == 20 && s.bytes().all(|b| b.is_ascii_digit()));
             let pair_name = name
                 .strip_prefix("pair-evidence-")
                 .and_then(|s| s.strip_suffix(".json"))
                 .is_some_and(|s| s.len() == 20 && s.bytes().all(|b| b.is_ascii_digit()));
-            if !(name == "snapshot.json" || pair_name)
+            if !(name == "snapshot.json"
+                || name == "recording-context.json"
+                || pair_name
+                || recording_name)
                 || (name == "snapshot.json" && self.next != 0)
-                || (pair_name && !self.stage.join("snapshot.json").is_file())
+                || ((pair_name || recording_name || name == "recording-context.json")
+                    && !self.stage.join("snapshot.json").is_file())
             {
                 return Err(OutputError::Invalid("SIDECAR_NAME_OR_ORDER"));
             }
@@ -324,6 +340,40 @@ impl Job {
             let _ = fs::write(
                 self.stage.join("FAILED"),
                 b"sidecar write failed; output incomplete\n",
+            );
+        }
+        result
+    }
+    /// Immutable content-addressed original recording bytes; never interpreted as
+    /// pixels or rewritten. Repeated references may reuse an identical blob.
+    pub fn attach_source_blob(&mut self, sha256: &str, bytes: &[u8]) -> Result<()> {
+        if self.failed {
+            return Err(OutputError::Invalid("JOB_FAILED"));
+        }
+        let result = (|| {
+            if bytes.len() > 64 * 1024 * 1024 || digest(bytes) != sha256 {
+                return Err(OutputError::Invalid("SOURCE_BLOB_DIGEST_OR_LIMIT"));
+            }
+            let directory = self.stage.join("source-blobs");
+            match fs::create_dir(&directory) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e.into()),
+            }
+            let path = directory.join(sha256);
+            if path.is_file() {
+                return Ok(());
+            }
+            let mut file = new_file(&path)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.failed = true;
+            let _ = fs::write(
+                self.stage.join("FAILED"),
+                b"source blob failed; output incomplete\n",
             );
         }
         result
@@ -373,7 +423,11 @@ impl Job {
         }
         let entry = Entry {
             version: 1,
-            unit: "mm",
+            unit: if matches!(frame.record.kind, DepthKind::OriginalSdkCounts { .. }) {
+                "sdk-counts"
+            } else {
+                "mm"
+            },
             file: name,
             width: frame.width,
             height: frame.height,
@@ -418,6 +472,9 @@ impl Job {
         if matches!(self.mode, Mode::Directory | Mode::Both) {
             File::open(self.stage.join("frames"))?.sync_all()?;
         }
+        if self.stage.join("source-blobs").is_dir() {
+            File::open(self.stage.join("source-blobs"))?.sync_all()?;
+        }
         // Platform no-replace rename closes the concurrent target-creation race.
         if self.final_path.exists() {
             return Err(OutputError::Invalid("OUTPUT_EXISTS"));
@@ -434,6 +491,12 @@ impl Job {
         Ok(self.final_path.clone())
     }
 }
+/// Atomic no-replace publication for an already validated private directory.
+/// Caller must sync staged contents and handle parent-directory sync separately.
+pub fn rename_directory_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    rename_no_replace(from, to)
+}
+
 #[cfg(unix)]
 fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     use std::os::unix::ffi::OsStrExt;

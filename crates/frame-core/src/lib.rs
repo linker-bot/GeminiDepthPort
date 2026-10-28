@@ -7,7 +7,10 @@
 use std::{collections::VecDeque, error::Error, fmt, time::Instant};
 
 mod depth;
-pub use depth::{DepthNormalizationError, DepthStats, NormalizedDepth, normalize_depth_mm};
+pub use depth::{
+    DepthNormalizationError, DepthSampleStats, DepthStats, NormalizedDepth, measure_depth_samples,
+    normalize_depth_mm,
+};
 mod packet;
 mod pair;
 pub use packet::{

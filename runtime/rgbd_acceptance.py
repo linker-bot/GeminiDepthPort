@@ -579,6 +579,9 @@ def run_live(spec, seconds, discovery_seconds, tf_delay_seconds, wire_only=False
                 subscriptions.append(node.create_subscription(TFMessage, '/tf_static', receive_tf, tf_qos))
                 topic_bindings.append(('tf', '/tf_static', True))
                 tf_created = True
+                # This late-created binding was absent from the initial poll.
+                # Observe its offered QoS inside even a short remaining window.
+                next_qos = elapsed
             if elapsed >= next_qos:
                 for key, topic, is_tf in topic_bindings:
                     endpoints = node.get_publishers_info_by_topic(topic)

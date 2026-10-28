@@ -161,3 +161,15 @@ for(const stream of ['color','depth']){$(stream+'-image').addEventListener('load
 window.addEventListener('beforeunload',event=>{if(dirty){event.preventDefault();event.returnValue='';}});
 updateButtons();
 refresh(true);
+$('refresh-quality').addEventListener('click', async () => {
+  const results = [];
+  for (const camera of state?.inventory?.cameras || []) {
+    if (!camera.enabled) continue;
+    try {
+      const result = await api('/api/quality/current?camera=' + encodeURIComponent(camera.name));
+      const quality = result.result.quality;
+      results.push({camera:camera.name, session_kind:result.session_kind, state:quality.state, latest_event_sequence:quality.latest_event_sequence});
+    } catch (_) { results.push({camera:camera.name, state:'观测不可用'}); }
+  }
+  $('quality-summary').textContent = JSON.stringify(results, null, 2);
+});

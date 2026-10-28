@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use geminidepthport::{calibration, config, control::Controller, generation, server, util::*};
 use serde_json::{Value, json};
 use std::{
@@ -41,7 +41,7 @@ fn run() -> Result<()> {
         || a.iter().any(|v| ["--help", "-h"].contains(&v.as_str()))
     {
         println!(
-            "geminidepthport [--root DIRECTORY] COMMAND\nCommands: serve, scan, validate [--file FILE] [--draft], migrate [--bindings FILE] [--apply --expected-plan HASH], render [--draft], preflight, build, up, boot, status, check, down, stack-stop [--remove], devices, image-ref, bind NAME SERIAL, set NAME KEY JSON, confirm-profile NAME, protect, release-protection, logs, calibration-export, capture-snapshot, recording-status, http-health"
+            "geminidepthport [--root DIRECTORY] COMMAND\nCommands: serve, scan, validate [--file FILE] [--draft], migrate [--bindings FILE] [--apply --expected-plan HASH], render [--draft], preflight, build, up, boot, status, check, down, stack-stop [--remove], devices, image-ref, bind NAME SERIAL, set NAME KEY JSON, confirm-profile NAME, protect, release-protection, logs, calibration-export, capture-snapshot, recording-status, usbfs-status, quality-current NAME, quality-events NAME [--cursor JSON] [--limit N], quality-session-summary NAME [--generation ID --session ID], recording-context [--require-strong], http-health"
         );
         return Ok(());
     }
@@ -84,6 +84,11 @@ fn run() -> Result<()> {
         "release-protection",
         "recording-status",
         "capture-snapshot",
+        "usbfs-status",
+        "quality-current",
+        "quality-events",
+        "quality-session-summary",
+        "recording-context",
     ];
     let _lock = if (cmd == "migrate" && !flag(&a, "--apply"))
         || ["scan", "validate", "image-ref", "status", "logs"].contains(&cmd)
@@ -153,6 +158,17 @@ fn run() -> Result<()> {
         println!("{}", serde_json::to_string(&result)?);
         return Ok(());
     }
+    if cmd == "quality-session-summary"
+        && (option(&a, "--generation").is_some() || option(&a, "--session").is_some())
+    {
+        let generation =
+            option(&a, "--generation").context("ARGUMENT: generation and session required")?;
+        let session =
+            option(&a, "--session").context("ARGUMENT: generation and session required")?;
+        let result = geminidepthport::quality_history::read(&ctl, &a[1], &generation, &session)?;
+        println!("{}", serde_json::to_string(&result)?);
+        return Ok(());
+    }
     let (d, inventory_revision) = if cmd == "validate" && option(&a, "--file").is_some() {
         (
             read_json(&PathBuf::from(option(&a, "--file").unwrap()))?,
@@ -176,6 +192,7 @@ fn run() -> Result<()> {
             let s = generation::create(&ctl, &d, flag(&a, "--draft"))?;
             json!({"generated":true,"draft":s["draft"],"camera_count":s["cameras"].as_array().unwrap().len()})
         }
+        "usbfs-status" => geminidepthport::usbfs::status(&d),
         "preflight" => {
             ctl.preflight(&d)?;
             json!({"ready":true})
@@ -210,7 +227,33 @@ fn run() -> Result<()> {
             }
             outcome?
         }
-        "protect" => ctl.protect()?,
+        "quality-current" | "quality-events" | "quality-session-summary" => {
+            let kind = cmd.strip_prefix("quality-").unwrap();
+            let cursor = option(&a, "--cursor")
+                .map(|v| -> Result<quality_core::EventCursor> {
+                    Ok(serde_json::from_value(capture_contract::parse_strict(
+                        v.as_bytes(),
+                    )?)?)
+                })
+                .transpose()?;
+            let limit = option(&a, "--limit")
+                .map(|v| v.parse())
+                .transpose()?
+                .unwrap_or(50);
+            geminidepthport::managed_quality::query(&ctl, &a[1], kind, cursor, limit)?
+        }
+        "recording-context" => {
+            geminidepthport::managed_quality::recording_context(&ctl, flag(&a, "--require-strong"))?
+        }
+        "protect" => {
+            require(
+                !flag(&a, "--require-strong")
+                    || geminidepthport::capture_backend::selected(&d) == "rust",
+                "RECORDING_STRONG_GUARANTEE_UNSUPPORTED",
+                "Official observer cannot prevent internal native SDK reopen",
+            )?;
+            ctl.protect()?
+        }
         "capture-snapshot" => {
             let generation = ctl.check_render(&d)?;
             let snapshots = geminidepthport::capture_snapshot::acquire(&ctl, &d, &generation)?;
@@ -290,6 +333,50 @@ fn run() -> Result<()> {
 fn validate_arguments(a: &[String]) -> Result<()> {
     let cmd = a[0].as_str();
     let (values, flags, positional): (&[&str], &[&str], usize) = match cmd {
+        "quality-current" => (&[], &[], 1),
+        "quality-session-summary" => {
+            require(
+                a.get(1).is_some_and(|v| !v.starts_with("--")),
+                "ARGUMENT",
+                "Camera name required",
+            )?;
+            let mut seen = std::collections::BTreeSet::new();
+            let mut i = 2;
+            while i < a.len() {
+                let key = a[i].as_str();
+                require(
+                    ["--generation", "--session"].contains(&key)
+                        && seen.insert(key)
+                        && a.get(i + 1).is_some_and(|v| !v.starts_with("--")),
+                    "ARGUMENT",
+                    "Invalid historical summary option",
+                )?;
+                i += 2;
+            }
+            require(
+                seen.is_empty() || (seen.contains("--generation") && seen.contains("--session")),
+                "ARGUMENT",
+                "Generation and session must be supplied together",
+            )?;
+            return Ok(());
+        }
+        "quality-events" => {
+            require(a.len() >= 2, "ARGUMENT", "Camera name required")?;
+            let mut seen = std::collections::BTreeSet::new();
+            let mut i = 2;
+            while i < a.len() {
+                require(
+                    ["--cursor", "--limit"].contains(&a[i].as_str())
+                        && i + 1 < a.len()
+                        && seen.insert(a[i].as_str()),
+                    "ARGUMENT",
+                    "Invalid quality query option",
+                )?;
+                i += 2;
+            }
+            return Ok(());
+        }
+        "recording-context" | "protect" => (&[], &["--require-strong"], 0),
         "serve" => (&["--host", "--port"], &[], 0),
         "http-health" => (&["--port"], &[], 0),
         "validate" => (&["--file"], &["--draft"], 0),
@@ -300,8 +387,8 @@ fn validate_arguments(a: &[String]) -> Result<()> {
         "set" => (&[], &[], 3),
         "confirm-profile" => (&[], &[], 1),
         "scan" | "preflight" | "build" | "up" | "boot" | "status" | "check" | "down"
-        | "devices" | "image-ref" | "protect" | "release-protection" | "logs"
-        | "calibration-export" | "recording-status" | "capture-snapshot" => (&[], &[], 0),
+        | "devices" | "image-ref" | "release-protection" | "logs" | "calibration-export"
+        | "recording-status" | "capture-snapshot" | "usbfs-status" => (&[], &[], 0),
         _ => anyhow::bail!("ARGUMENT: Unknown command"),
     };
     if positional > 0 {

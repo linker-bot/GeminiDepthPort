@@ -77,6 +77,9 @@ fn load_inner(ctl: &Controller) -> Result<Option<Value>> {
         for file in ["camera.yaml", "health.json", "binding.json"] {
             required.insert(format!("config/{name}/{file}"));
         }
+        if record["observer_backend"] == "ros-observed-v1" {
+            required.insert(format!("config/{name}/observer-policy.json"));
+        }
         if capture_backend::selected(&record) == "rust" {
             for file in ["capture.json", "runtime.json"] {
                 required.insert(format!("config/{name}/{file}"));
@@ -220,6 +223,7 @@ pub fn create(ctl: &Controller, d: &Value, draft: bool) -> Result<Value> {
     if let Ok(Some(c)) = load(ctl) {
         if c["inventory_sha256"] == digest
             && c["draft"] == draft
+            && (d["schema_version"] != 2 || c["quality_evidence_version"] == 1)
             && (!rust_backend || c.get("capture_runtime").unwrap_or(&Value::Null) == &runtime)
         {
             return Ok(c);
@@ -233,6 +237,7 @@ pub fn create(ctl: &Controller, d: &Value, draft: bool) -> Result<Value> {
     let stage = tempfile::Builder::new()
         .prefix(".staging-")
         .tempdir_in(&parent)?;
+    private_dir(&stage.path().join("config"))?;
     let mut cameras = config::active(d);
     cameras.sort_by_key(|c| text(&c["name"]).to_string());
     let mut services = json!({"web":web_service()});
@@ -271,7 +276,17 @@ pub fn create(ctl: &Controller, d: &Value, draft: bool) -> Result<Value> {
                 files[&relative] = hash(content).into();
             }
         }
+        if !rust_backend && d["schema_version"] == 2 {
+            let observer = crate::official_observer::policy(d, &c, &id)?;
+            let relative = format!("config/{name}/observer-policy.json");
+            let content = serde_json::to_vec_pretty(&observer)?;
+            write_private(&stage.path().join(&relative), &content)?;
+            files[&relative] = hash(content).into();
+        }
         let mut env = communication(d);
+        if !rust_backend && d["schema_version"] == 2 {
+            env["ROS_LOCALHOST_ONLY"] = "0".into();
+        }
         env.as_object_mut().unwrap().extend(json!({"CAMERA_ROLE":name,"CAMERA_NAME":c["frame_prefix"],"CAMERA_NAMESPACE":c["namespace"],"CAMERA_SCHEMA":d["schema_version"].to_string(),"CAMERA_MODEL":c["model"],"CAMERA_LAUNCH":c["launch_file"],"HOME":"/tmp","ROS_HOME":"/tmp/ros"}).as_object().unwrap().clone());
         let mut spec = camera_service(ctl, d, env, &dest.join("config").join(name))?;
         if rust_backend {
@@ -283,6 +298,17 @@ pub fn create(ctl: &Controller, d: &Value, draft: bool) -> Result<Value> {
                 .push(json!({"type":"bind","source":gate,"target":"/recording","read_only":false}));
         }
 
+        if d["schema_version"] == 2 {
+            private_dir(&stage.path().join("evidence"))?;
+            let evidence = stage.path().join("evidence").join(name);
+            private_dir(&evidence)?;
+            private_dir(&evidence.join(if rust_backend { "quality" } else { "sessions" }))?;
+            private_dir(&evidence.join("snapshots"))?;
+            spec["volumes"].as_array_mut().unwrap().push(json!({
+                "type":"bind","source":dest.join("evidence").join(name),
+                "target":if rust_backend{"/tmp/capture"}else{"/tmp/capture-observer"},
+                "read_only":false}));
+        }
         spec["labels"]["orbbec.generation"] = id.clone().into();
         spec["labels"]["orbbec.camera"] = name.into();
         if let Some(prev) = previous {
@@ -296,6 +322,12 @@ pub fn create(ctl: &Controller, d: &Value, draft: bool) -> Result<Value> {
     write_private(&stage.path().join("compose.yaml"), &content)?;
     files["compose.yaml"] = hash(content).into();
     let mut record = json!({"kind":KIND,"generation":id,"draft":draft,"schema_version":d["schema_version"],"inventory_sha256":digest,"communication_profile":config::COMMUNICATION,"cameras":summaries,"files":files});
+    if d["schema_version"] == 2 {
+        record["quality_evidence_version"] = 1.into();
+    }
+    if !rust_backend && d["schema_version"] == 2 {
+        record["observer_backend"] = "ros-observed-v1".into();
+    }
     if rust_backend {
         record["capture_backend"] = "rust".into();
         record["capture_runtime"] = runtime;

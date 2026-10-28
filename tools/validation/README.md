@@ -138,3 +138,58 @@ language-speed comparison. Actual SDK calibration, TF, scale or wire acceptance
 failure remains a failed trial; no tolerance, spec or source fields are relaxed
 to obtain a performance number. Plan reports select the official mode but do not
 claim the official driver has been compared until all measured trials pass.
+
+### Explicit SDK crash/reopen control (no production recovery changes)
+
+`tools/validation/sdk_reopen_control.py` is a short functional diagnostic for the
+SDK boundary. Build `sdk_align_capture.cpp` using the same SDK headers/library as
+the deployment (the existing C++17/nlohmann-json build prerequisites above).
+Run inside one isolated test container, with the same library and explicitly
+released devices. Never run alongside a manager or another camera owner.
+
+```sh
+python3 tools/validation/sdk_reopen_control.py \
+  --config /private/capture.json --binary /tools/sdk-align-capture \
+  --output-dir /private/new-sdk-reopen-control --retries 2
+# Review the plan, then explicitly add both flags:
+# --execute --devices-released
+```
+
+The first child uses test-only `--hold-after-ready`: after receiving a complete
+SDK frameset and validating actual profiles/layout/scale, it writes `READY` and
+holds the live pipeline. The runner sends SIGKILL to its own process group,
+waits two seconds, then makes two (optionally three) fresh process attempts in
+the same container. Every attempt has a 20-second outer timeout; the existing
+capture loop has its unchanged 12-second window and two-second warmup. No USB
+reset, device property write or threshold change is added. Non-held attempts
+retain the existing SDK alignment operation and ordinary cleanup behavior.
+
+Each attempt records `frameset_ready`, `capture_complete`, `normal_exit`, return
+code and timeout separately. In particular, a later success never changes the
+first reopen failure. `frameset_ready=true` with nonzero exit can mean a later
+alignment/storage failure; zero frameset readiness alone does not identify its
+cause. The outer timeout kills the child, so a timed-out attempt cannot be
+claimed to have run SDK destructors. A successful runner exit means the
+experiment finished, **not** that every reopen succeeded. `report.json` preserves
+partial results when the control itself fails.
+
+Only the explicitly supplied config is copied, to a new mode-0700 directory
+with mode-0600 config; raw images/calibration and native logs remain private in
+that directory. The stdout report contains no serial, matrix or topic. It is
+not a physical accuracy test, a production recovery implementation, or proof
+that container recreation is a supported device recovery operation.
+
+Offline process-level regression tests (no SDK or hardware):
+`python3 -m unittest discover -s tests -p test_sdk_reopen_control.py`.
+
+`management_acceptance.py --execute` additionally reads the real quality current,
+paged-events (including an encoded follow-up cursor), and session-summary HTTP
+APIs after formal readiness. An active session correctly has no finalized
+summary; the check never fabricates one. It requests `recording-context
+--require-strong`, then protects with the same requirement and verifies the
+active native gate ACK, session/instance/container and immutable SDK snapshot
+binding. Wrong-credential release must retain that binding; authenticated release
+must clear `session_bound` and `native_gate_ack_verified` while retaining the
+current capture snapshot. Neither protection token nor raw context is printed in
+the public summary. Full context/quality evidence remains in private acceptance
+logs. Existing preview/confirmation and real health thresholds remain unchanged.

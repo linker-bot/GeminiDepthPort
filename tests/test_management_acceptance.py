@@ -91,3 +91,80 @@ class ManagementAcceptanceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def native_context(protected=False):
+    sid, instance, snapshot = 'a'*32, 'b'*64, 'c'*64
+    calibration = dict(source='sdk-active-profiles', actual_runtime_observed=True,
+                       physical_accuracy_verified=False, source_session_id=sid, source_instance_id=instance)
+    return dict(version=1, kind='recording-context', backend='rust', generation_id='generation',
+                physical_accuracy_verified=False, protection=dict(guard_version=2,
+                strong_guarantee_available=True, native_restart_gate=True, session_bound=protected,
+                native_gate_ack_verified=protected, state='active' if protected else 'unprotected'),
+                cameras=[dict(camera_name='cam_a', container_id='d'*64, instance_id=instance,
+                session_id=sid, session_kind='sdk-worker', snapshot=dict(version=1,snapshot_id=snapshot,
+                content=dict(binding=dict(instance_id=instance,session_id=sid,generation_id='generation'),
+                calibration=calibration, configuration=dict(runtime_config_sha256='e'*64))))])
+
+
+class NewFeatureAcceptanceTests(unittest.TestCase):
+    def test_context_requires_real_active_ack_and_same_immutable_runtime(self):
+        original = native_context()
+        binding = acceptance.context_bindings(original, ['cam_a'], False)
+        protected = native_context(True)
+        self.assertEqual(acceptance.context_bindings(protected, ['cam_a'], True), binding)
+        for field in ('session_bound', 'native_gate_ack_verified', 'native_restart_gate'):
+            invalid = json.loads(json.dumps(protected))
+            invalid['protection'][field] = False
+            with self.assertRaises(acceptance.AcceptanceFailure):
+                acceptance.context_bindings(invalid, ['cam_a'], True)
+        protected['cameras'][0]['snapshot']['content']['calibration']['source'] = 'ros-camera-info-tf'
+        with self.assertRaisesRegex(acceptance.AcceptanceFailure, 'SNAPSHOT_BINDING'):
+            acceptance.context_bindings(protected, ['cam_a'], True)
+        runner = acceptance.Runner(SimpleNamespace(workspace=Path('/unused')))
+        changed = native_context(True)
+        changed['cameras'][0]['container_id'] = 'f'*64
+        with patch.object(runner, 'cli', return_value=changed):
+            with self.assertRaisesRegex(acceptance.AcceptanceFailure, 'RUNTIME_CHANGED'):
+                runner.verify_context(['cam_a'], True, binding)
+
+    def test_released_context_cannot_keep_stale_positive_ack(self):
+        value = native_context(False)
+        value['protection']['native_gate_ack_verified'] = True
+        with self.assertRaisesRegex(acceptance.AcceptanceFailure, 'NATIVE_PROTECTION'):
+            acceptance.context_bindings(value, ['cam_a'], False)
+
+    def test_quality_queries_actual_three_endpoints_and_encoded_cursor(self):
+        context = native_context()
+        bindings = acceptance.context_bindings(context, ['cam_a'], False)
+        def response(kind, result):
+            return dict(version=1,kind='quality-'+kind,backend='rust',camera_name='cam_a',
+                        session_kind='sdk-worker',worker_ready=True,instance_id='b'*64,session_id='a'*32,
+                        snapshot_id='c'*64,generation_id='generation',result=result)
+        cursor = dict(origin_session_id='a'*32, after_sequence=1)
+        responses = [response('current',dict(quality=dict(session_id='a'*32,origin_session_id='a'*32,
+                     current_session_finalized=False,latest_event_sequence=1))),
+                     response('events',dict(page=dict(origin_session_id='a'*32,latest_sequence=1,
+                     events=[dict(sequence=1)],next_cursor=cursor))),
+                     response('events',dict(page=dict(origin_session_id='a'*32,events=[]))),
+                     response('session-summary',dict(available=False,summary=None,finalized_sessions=[]))]
+        runner = acceptance.Runner(SimpleNamespace(workspace=Path('/unused')))
+        with patch.object(runner, 'http', side_effect=responses) as http:
+            runner.verify_quality(context, bindings)
+        paths = [call.args[0] for call in http.call_args_list]
+        self.assertTrue(paths[0].startswith('/api/quality/current?'))
+        self.assertIn('cursor=%7B', paths[2])
+        self.assertTrue(paths[3].startswith('/api/quality/session-summary?'))
+        stale = response('current', {})
+        stale['snapshot_id'] = 'f'*64
+        with self.assertRaisesRegex(acceptance.AcceptanceFailure, 'RUNTIME_BINDING'):
+            acceptance.quality_binding(stale,'cam_a',bindings['cam_a'],'generation','current')
+
+    def test_strong_protect_token_never_written_to_logs(self):
+        with tempfile.TemporaryDirectory() as root:
+            runner = acceptance.Runner(SimpleNamespace(workspace=Path(root),manager_binary=Path('/fake')))
+            runner.logs.mkdir()
+            result = SimpleNamespace(returncode=0,stdout='{"token":"secret-memory-only"}',stderr='')
+            with patch.object(acceptance.subprocess,'run',return_value=result):
+                self.assertEqual(runner.cli('protect','protect','--require-strong')['token'],'secret-memory-only')
+            self.assertEqual(list(runner.logs.iterdir()), [])

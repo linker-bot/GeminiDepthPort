@@ -290,4 +290,83 @@ class RgbdConsumerTests(unittest.TestCase):
         with self.assertRaises(ValueError): rotation_quaternion([-1,0,0,0,1,0,0,0,1])
 
 
+class LiveSchedulingTests(unittest.TestCase):
+    def test_short_window_observes_qos_when_delayed_tf_subscription_is_created(self):
+        import sys
+        from types import ModuleType
+        from unittest.mock import patch
+        s = spec()
+        for stream in s['streams'].values(): stream['min_frames'] = 100
+        s['pair']['min_pairs'] = 100
+        clock = [0.0]; callbacks = {}; queries = []; tf_created = []
+        class Policy:
+            RELIABLE = 1; VOLATILE = 2; TRANSIENT_LOCAL = 1
+        class Node:
+            def create_subscription(self, typ, topic, callback, qos):
+                callbacks[topic] = callback
+                if topic == '/tf_static':
+                    tf_created.append(clock[0])
+                    # Model an actual late-join static sample, independent of
+                    # the graph's offered-QoS observation.
+                    callback([dict(s['tf'])])
+                return callback
+            def get_publishers_info_by_topic(self, topic):
+                queries.append((topic, clock[0]))
+                return [NS(qos_profile=NS(reliability=Policy.RELIABLE,
+                    durability=Policy.TRANSIENT_LOCAL if topic == '/tf_static' else Policy.VOLATILE))]
+            def destroy_node(self): pass
+        index = [0]
+        def spin(node, timeout_sec):
+            clock[0] += .02; index[0] += 1
+            projected = {}
+            for role, stream in s['streams'].items():
+                frames = frame_events(s, role, index[0])
+                stamp = BASE + round(clock[0]*1e9) + (1000000 if role == 'depth' else 0)
+                for kind, _, value, _ in frames:
+                    if kind in ('image', 'info'): value['stamp_ns'] = stamp
+                    else:
+                        value.update(stamp_sec=stamp//1000000000, stamp_nanosec=stamp%1000000000,
+                                     system_timestamp_us=stamp//1000,
+                                     device_timestamp_us=(stamp-BASE)//1000)
+                    topic = stream[{'image':'image_topic','info':'camera_info_topic','metadata':'metadata_topic'}[kind]]
+                    callbacks[topic](NS(data=json.dumps(value)) if kind == 'metadata' else value)
+                projected[role] = (stamp, frames[2][2])
+            color, depth = projected['color'], projected['depth']
+            callbacks[s['pair']['topic']](NS(data=json.dumps({
+                'version':1, 'session_id':SESSION, 'pair_sequence':index[0],
+                'color_sequence':color[1]['sequence'], 'depth_sequence':depth[1]['sequence'],
+                'color_stamp_ns':color[0], 'depth_stamp_ns':depth[0],
+                'color_timestamp_us':color[1]['device_timestamp_us'],
+                'depth_timestamp_us':depth[1]['device_timestamp_us'],
+                'delta_us':1000, 'clock':'device', 'same_frameset':True,
+                'provenance':'sdkframeset', 'hardware_sync_verified':False,
+                'publisher_qos_verified':True})))
+        ros = ModuleType('rclpy'); ros.init = lambda: None; ros.shutdown = lambda: None
+        ros.create_node = lambda name: Node(); ros.spin_once = spin
+        qos = ModuleType('rclpy.qos'); qos.QoSProfile = lambda **kw: NS(**kw)
+        qos.ReliabilityPolicy = Policy; qos.DurabilityPolicy = Policy
+        modules = {'rclpy':ros, 'rclpy.qos':qos}
+        for package, names in [('sensor_msgs',('Image','CameraInfo')),('std_msgs',('String',)),('tf2_msgs',('TFMessage',))]:
+            modules[package] = ModuleType(package); messages = ModuleType(package+'.msg')
+            for name in names: setattr(messages,name,type(name,(),{}))
+            modules[package+'.msg'] = messages
+        with patch.dict(sys.modules,modules), \
+             patch.object(a.time,'monotonic',side_effect=lambda:clock[0]), \
+             patch.object(a.time,'time_ns',side_effect=lambda:BASE+round(clock[0]*1e9)), \
+             patch.object(a,'image_projection',side_effect=lambda msg,*args:msg), \
+             patch.object(a,'info_projection',side_effect=lambda msg:msg), \
+             patch.object(a,'tf_projection',side_effect=lambda msg,*args:msg):
+            report = a.run_live(s, seconds=5, discovery_seconds=2, tf_delay_seconds=1)
+        self.assertTrue(report['ok'],report)
+        self.assertGreaterEqual(report['matched_pairs'],100)
+        self.assertTrue(report['tf_received'])
+        self.assertTrue(report['late_tf_subscription_requested'])
+        self.assertIn('tf',report['qos_observed'])
+        tf_queries = [at for topic, at in queries if topic == '/tf_static']
+        self.assertEqual(len(tf_created),1)
+        self.assertTrue(tf_queries)
+        self.assertLessEqual(tf_queries[0]-tf_created[0],.02)
+        self.assertLess(tf_queries[0],2+5)
+
+
 if __name__ == '__main__': unittest.main()

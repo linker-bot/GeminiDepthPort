@@ -273,6 +273,13 @@ elif a and a[0] in ('exec','stop'):
             name=camera['name'];service=compose['services']['camera_'+name]
             self.assertEqual(service['labels']['orbbec.generation'],pointer['generation'])
             self.assertEqual(service['ipc'],'private')
+            evidence=folder/'evidence'/name
+            self.assertEqual(evidence.stat().st_mode & 0o777,0o700)
+            self.assertTrue(any(isinstance(v,dict) and v.get('source')==str(evidence.resolve())
+                                and v.get('target')=='/tmp/capture-observer' and v.get('read_only') is False
+                                for v in service['volumes']))
+            self.assertEqual((evidence/'sessions').stat().st_mode & 0o777,0o700)
+            self.assertEqual((evidence/'snapshots').stat().st_mode & 0o777,0o700)
             if previous:self.assertEqual(service['depends_on'],{previous:{'condition':'service_healthy'}})
             previous='camera_'+name
             config=json.loads((folder/'config'/name/'camera.yaml').read_text())
@@ -283,6 +290,38 @@ elif a and a[0] in ('exec','stop'):
             self.assertTrue(all(s['required_reliability']=='reliable' for s in health['streams']))
         if os.environ.get('GDP_REAL_COMPOSE')=='1':
             subprocess.run(['docker','compose','-f',str(folder/'compose.yaml'),'--profile','cameras','config','--quiet'],env=dict(os.environ,ORBBEC_DEPLOY_DIR=str(self.root)),check=True)
+    def test_historical_summary_real_cli_accepts_paired_options_without_inventory_or_docker(self):
+        generation='c'*32;session='a'*32
+        folder=self.root/'state/generations'/generation
+        for path in [self.root/'state',self.root/'state/generations',folder,folder/'config',
+                     folder/'config/cam_a',folder/'evidence',folder/'evidence/cam_a',
+                     folder/'evidence/cam_a/quality',folder/'evidence/cam_a/quality'/session]:
+            path.mkdir(exist_ok=True);path.chmod(0o700)
+        config=folder/'config/cam_a/capture.json';config.write_text('{}');config.chmod(0o600)
+        manifest=folder/'manifest.json'
+        manifest.write_text(json.dumps({'kind':'geminidepthport-generation-v1','generation':generation,
+            'quality_evidence_version':1,'capture_backend':'rust','cameras':[{'name':'cam_a'}],
+            'files':{'config/cam_a/capture.json':hashlib.sha256(config.read_bytes()).hexdigest()}}))
+        manifest.chmod(0o600)
+        (self.root/'inventory.json').unlink()
+        for options in [('--generation',generation,'--session',session),('--session',session,'--generation',generation)]:
+            result=json.loads(self.cli('quality-session-summary','cam_a',*options).stdout)
+            self.assertEqual(result['session_id'],session)
+            self.assertEqual(result['generation_id'],generation)
+            self.assertEqual(result['state'],'incomplete')
+            self.assertFalse(result['live']);self.assertFalse(result['worker_ready'])
+        for options in [('--generation',generation),('--session',session),
+                        ('--generation',generation,'--session'),
+                        ('--generation',generation,'--generation',generation,'--session',session),
+                        ('--unknown','value')]:
+            self.assertIn('ARGUMENT',self.cli('quality-session-summary','cam_a',*options,ok=False).stderr)
+        self.assertFalse((self.root/'docker-calls.jsonl').exists())
+
+    def test_formal_four_cameras_still_rejected_before_generation(self):
+        self.data['cameras'].append(copy.deepcopy(self.data['cameras'][0]))
+        (self.root/'inventory.json').write_text(json.dumps(self.data))
+        self.assertIn('CAMERA_COUNT',self.cli('validate','--draft',ok=False).stderr)
+        self.assertFalse((self.root/'state/current-generation.json').exists())
     def test_python_created_generations_are_readable(self):
         sys.path.insert(0,str(BASE));sys.path.insert(0,str(BASE/'tests'))
         from unittest.mock import patch

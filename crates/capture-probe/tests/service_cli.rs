@@ -210,6 +210,7 @@ fn real_failed_service_persists_private_final_quality_without_device_identity() 
     }
     value["quality_policy"] = quality.clone();
     value["quality_runtime"] = json!({"version":1,"quality":quality,"stale_after_ns":2_000_000_000_u64,"event_capacity":8,"window_capacity":8,"window_horizon_ns":10_000_000_000_u64,"summary_capacity":1,"max_sessions":1,"rules":rules});
+    value["raw_recording"] = json!({"directory":dir.join("raw"),"name":"native","queue_capacity":1,"max_pairs":2,"max_bytes":1_000_000});
     let path = dir.join("config.json");
     fs::write(&path, value.to_string()).unwrap();
     let mut child = ChildGuard(
@@ -233,6 +234,23 @@ fn real_failed_service_persists_private_final_quality_without_device_identity() 
     let status: Value =
         serde_json::from_slice(&fs::read(dir.join("status.json")).unwrap()).unwrap();
     let quality = &status["quality"];
+    assert_eq!(status["raw_recording"]["state"], "failed");
+    assert_eq!(status["raw_recording"]["submitted_pairs"], 0);
+    assert_eq!(
+        status["raw_recording"]["recording_protection_released"],
+        false
+    );
+    assert_eq!(status["raw_recording"]["native_snapshot_id"], Value::Null);
+    let events: Value =
+        serde_json::from_slice(&fs::read(quality["events_path"].as_str().unwrap()).unwrap())
+            .unwrap();
+    assert!(
+        events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["scope"]["kind"] == "recorder")
+    );
     assert_eq!(quality["state"], "degraded");
     for field in ["current_path", "events_path", "summary_path"] {
         let path = quality[field].as_str().unwrap();

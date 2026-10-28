@@ -42,3 +42,47 @@ fn persistent_cli_recovers_after_invalid_and_oversized_input_without_private_ech
     assert!(!text.contains("synthetic_color_optical"));
     assert!(!text.contains("synthetic_depth_optical"));
 }
+#[test]
+fn cli_interruption_command_survives_finalization_as_a_bounded_reasoned_event() {
+    let path =
+        std::env::temp_dir().join(format!("observer-interruption-{}.json", std::process::id()));
+    std::fs::write(&path, serde_json::to_vec(&common::config()).unwrap()).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_capture-observer"))
+        .args(["--config", path.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for command in [
+        json!({"kind":"interrupt","at":common::at(1),"reason":"driver-exited"}),
+        json!({"kind":"finalize"}),
+        json!({"kind":"query","request":{"version":1,"query":{"kind":"snapshot"}}}),
+        json!({"kind":"query","request":{"version":1,"query":{"kind":"events","cursor":null,"limit":16}}}),
+    ] {
+        writeln!(input, "{}", json!({"version":1,"command":command})).unwrap();
+    }
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert!(output.status.success());
+    let lines = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(lines[0]["kind"], "interrupted");
+    let snapshot = &lines[2]["result"]["quality"]["result"]["snapshot"];
+    assert_eq!(snapshot["state"], "failed");
+    assert_eq!(snapshot["interruption_reason"], "driver-exited");
+    assert_eq!(snapshot["streams"]["color"]["frame_count"], 0);
+    assert_eq!(
+        snapshot["finalized_sessions"][0]["interruption_reason"],
+        "driver-exited"
+    );
+    let events = lines[3]["result"]["quality"]["result"]["page"]["events"]
+        .as_array()
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["violation"], "OBSERVER_INTERRUPTED");
+}

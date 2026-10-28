@@ -600,3 +600,173 @@ fn sustained_fault_does_not_flush_transition_history_from_the_event_ring() {
     assert_eq!(page.events[1].transition, EventTransition::Recovered);
     assert_eq!(page.events[1].bad_observations, 10_000);
 }
+#[test]
+fn deferred_pixel_phase_counts_receipt_once_and_keeps_hysteresis_independent_of_action() {
+    let mut p = policy();
+    p.quality.action = QualityAction::ReportOnly;
+    p.rules
+        .get_mut(&FrameViolation::FrameContractInvalid)
+        .unwrap()
+        .open_after = 2;
+    let mut e = QualityEngine::new(p, id('a'), vec!["color".into()]).unwrap();
+    for n in 1..=2 {
+        let f = frame('a', n * 10, 100 + n);
+        let context = f.context.clone();
+        e.record_frame_deferred_pixels(f).unwrap();
+        assert_eq!(e.snapshot().streams["color"].frame_count, n);
+        e.record_pixel_metrics(
+            &context,
+            DepthPixelMetrics {
+                samples: 4,
+                zero_samples: 3,
+                nonzero_samples: 1,
+                max_u16_samples: 1,
+            },
+            at('a', n * 10 + 1),
+            true,
+        )
+        .unwrap();
+        assert_eq!(active(&e, FrameViolation::FrameContractInvalid), n == 2);
+        assert!(
+            e.record_pixel_metrics(
+                &context,
+                DepthPixelMetrics {
+                    samples: 1,
+                    zero_samples: 0,
+                    nonzero_samples: 1,
+                    max_u16_samples: 0
+                },
+                at('a', n * 10 + 2),
+                true
+            )
+            .is_err()
+        );
+    }
+    let s = e.snapshot();
+    assert_eq!(s.streams["color"].frame_count, 2);
+    let m = &s.streams["color"].window_metrics;
+    assert_eq!(m.valid_fraction, Some(0.25));
+    assert_eq!(m.zero_fraction, Some(0.75));
+    assert_eq!(m.max_u16_fraction, Some(0.25));
+    assert_eq!(m.camera_info_observed, None);
+    assert_eq!(m.depth_pixels.unwrap().samples, 8);
+    assert!(s.continue_allowed);
+    assert_eq!(
+        s.active_episodes
+            .iter()
+            .find(|v| v.violation == FrameViolation::FrameContractInvalid)
+            .unwrap()
+            .bad_observations,
+        2
+    );
+}
+#[test]
+fn bounded_window_fps_gap_signed_age_delta_and_classifications_expire_and_reset() {
+    let mut e = engine();
+    for (mono, source, received) in [(10, 100, 120), (30, 101, 111), (80, 102, 100)] {
+        let mut f = frame('a', mono, source);
+        f.received_unix_ns = Some(received);
+        e.record_frame(f).unwrap();
+        e.observe_pair_delta(at('a', mono + 1), mono).unwrap();
+        e.record_diagnostic(at('a', mono + 2), DiagnosticKind::MissingDepth)
+            .unwrap();
+    }
+    let s = e.snapshot();
+    let m = &s.streams["color"].window_metrics;
+    assert!((m.active_window_fps.unwrap() - 2e9 / 70.).abs() < 1.);
+    assert_eq!(m.max_receive_gap_ns, Some(50));
+    let a = m.source_age_ns.as_ref().unwrap();
+    assert_eq!((a.observations, a.min, a.max), (3, -2., 20.));
+    assert_eq!(s.pair_delta_us.as_ref().unwrap().max, 80.);
+    assert_eq!(
+        s.diagnostics.session_counts[&DiagnosticKind::MissingDepth],
+        3
+    );
+    assert!(m.depth_pixels.is_none());
+    e.tick(at('a', 190)).unwrap();
+    assert_eq!(
+        e.snapshot().streams["color"].window_metrics,
+        StreamWindowMetrics::default()
+    );
+    assert!(e.snapshot().pair_delta_us.is_none());
+    assert!(e.snapshot().diagnostics.window_counts.is_empty());
+    assert_eq!(
+        e.snapshot().diagnostics.session_counts[&DiagnosticKind::MissingDepth],
+        3
+    );
+    e.begin_session(id('b')).unwrap();
+    assert!(e.snapshot().diagnostics.session_counts.is_empty());
+    assert!(e.snapshot().pair_delta_us.is_none());
+}
+#[test]
+fn changed_binding_cannot_be_misclassified_as_source_timestamp_regression() {
+    let mut e = engine();
+    e.record_frame(frame('a', 10, 1000)).unwrap();
+    let mut f = frame('a', 20, 1);
+    f.context.configuration_id = ConfigurationId::parse("b".repeat(64)).unwrap();
+    e.record_frame(f).unwrap();
+    assert!(active(&e, FrameViolation::FrameContractInvalid));
+    assert!(!active(&e, FrameViolation::TimestampRegression));
+    assert_eq!(
+        e.snapshot().diagnostics.session_counts[&DiagnosticKind::BindingChanged],
+        1
+    );
+    let before = e.snapshot().streams["color"].frame_count;
+    let mut context = frame('a', 10, 1000).context;
+    context.received_mono_offset_ns = 99;
+    assert!(
+        e.record_pixel_metrics(
+            &context,
+            DepthPixelMetrics {
+                samples: 1,
+                zero_samples: 0,
+                nonzero_samples: 1,
+                max_u16_samples: 0
+            },
+            at('a', 21),
+            true
+        )
+        .is_err()
+    );
+    assert_eq!(e.snapshot().streams["color"].frame_count, before);
+}
+#[test]
+fn recorder_scope_is_terminal_under_unrelated_ros_health_and_old_scope_dtos_roundtrip() {
+    for text in [
+        r#"{"kind":"group"}"#,
+        r#"{"kind":"stream","stream_id":"color"}"#,
+    ] {
+        let scope: Scope = serde_json::from_str(text).unwrap();
+        assert_eq!(serde_json::to_string(&scope).unwrap(), text);
+    }
+    assert_eq!(
+        serde_json::to_string(&Scope::Recorder).unwrap(),
+        r#"{"kind":"recorder"}"#
+    );
+    let mut e = engine();
+    e.evaluate(
+        at('a', 1),
+        Scope::Recorder,
+        FrameViolation::FrameContractInvalid,
+        Condition::Violated,
+    )
+    .unwrap();
+    for offset in 2..8 {
+        e.evaluate(
+            at('a', offset),
+            Scope::Group,
+            FrameViolation::FrameContractInvalid,
+            Condition::Healthy,
+        )
+        .unwrap();
+    }
+    let page = e.events(None, 16).unwrap();
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0].scope, Scope::Recorder);
+    assert!(
+        e.snapshot()
+            .active_episodes
+            .iter()
+            .any(|episode| episode.scope == Scope::Recorder)
+    );
+}

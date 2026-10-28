@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "camera": "Gemini 305",
+      "complete": true,
+      "differences": {
+        "common_abs_difference_mm": {
+          "maximum": 5475,
+          "mean": 57.592753110442835,
+          "p50": 0,
+          "p95": 210
+        },
+        "common_exact_equal": 125185,
+        "common_valid": 237426,
+        "scalar_only": 2257,
+        "scalar_valid": 239683,
+        "scalar_z_semantics": "color-camera-Z",
+        "sdk_mm_conversion": "half-up-preserve-zero-clamp-positive-reject-overflow",
+        "sdk_mm_conversion_complete": true,
+        "sdk_mm_overflow": 0,
+        "sdk_nonzero": 245846,
+        "sdk_only": 8420,
+        "sdk_z_semantics": "SDK-reported-not-assumed-equivalent"
+      },
+      "scalar_result": {
+        "collisions": 5098,
+        "complete": true,
+        "invalid_ray": 0,
+        "occluded": 2212,
+        "out_of_bounds": 0,
+        "output_semantics": "color-camera-Z-u16-millimetres",
+        "physical_accuracy_verified": false,
+        "source_pixels": 307200,
+        "target_grid": "sdk-aligned-output-profile",
+        "valid_output": 239683,
+        "version": 1,
+        "zero_depth": 62419
+      },
+      "target_grid": "sdk-aligned-output-profile"
+    },
+    {
+      "camera": "Gemini 335L",
+      "complete": true,
+      "differences": {
+        "common_abs_difference_mm": {
+          "maximum": 743,
+          "mean": 2.9450668537792852,
+          "p50": 1,
+          "p95": 12
+        },
+        "common_exact_equal": 79621,
+        "common_valid": 256530,
+        "scalar_only": 0,
+        "scalar_valid": 256530,
+        "scalar_z_semantics": "color-camera-Z",
+        "sdk_mm_conversion": "half-up-preserve-zero-clamp-positive-reject-overflow",
+        "sdk_mm_conversion_complete": true,
+        "sdk_mm_overflow": 0,
+        "sdk_nonzero": 258410,
+        "sdk_only": 1880,
+        "sdk_z_semantics": "SDK-reported-not-assumed-equivalent"
+      },
+      "scalar_result": {
+        "collisions": 12110,
+        "complete": true,
+        "invalid_ray": 0,
+        "occluded": 6866,
+        "out_of_bounds": 0,
+        "output_semantics": "color-camera-Z-u16-millimetres",
+        "physical_accuracy_verified": false,
+        "source_pixels": 307200,
+        "target_grid": "sdk-aligned-output-profile",
+        "valid_output": 256530,
+        "version": 1,
+        "zero_depth": 38560
+      },
+      "target_grid": "sdk-aligned-output-profile"
+    },
+    {
+      "camera": "Gemini 2 A",
+      "complete": true,
+      "differences": {
+        "common_abs_difference_mm": {
+          "maximum": 96,
+          "mean": 1.3579114503816794,
+          "p50": 1,
+          "p95": 6
+        },
+        "common_exact_equal": 32660,
+        "common_valid": 81875,
+        "scalar_only": 0,
+        "scalar_valid": 81875,
+        "scalar_z_semantics": "color-camera-Z",
+        "sdk_mm_conversion": "half-up-preserve-zero-clamp-positive-reject-overflow",
+        "sdk_mm_conversion_complete": true,
+        "sdk_mm_overflow": 0,
+        "sdk_nonzero": 234681,
+        "sdk_only": 152806,
+        "sdk_z_semantics": "SDK-reported-not-assumed-equivalent"
+      },
+      "scalar_result": {
+        "collisions": 0,
+        "complete": true,
+        "invalid_ray": 0,
+        "occluded": 0,
+        "out_of_bounds": 83061,
+        "output_semantics": "color-camera-Z-u16-millimetres",
+        "physical_accuracy_verified": false,
+        "source_pixels": 256000,
+        "target_grid": "sdk-aligned-output-profile",
+        "valid_output": 81875,
+        "version": 1,
+        "zero_depth": 91064
+      },
+      "target_grid": "sdk-aligned-output-profile"
+    },
+    {
+      "camera": "Gemini 2 B",
+      "complete": true,
+      "differences": {
+        "common_abs_difference_mm": {
+          "maximum": 126,
+          "mean": 1.8831684463253084,
+          "p50": 1,
+          "p95": 8
+        },
+        "common_exact_equal": 38640,
+        "common_valid": 107043,
+        "scalar_only": 0,
+        "scalar_valid": 107043,
+        "scalar_z_semantics": "color-camera-Z",
+        "sdk_mm_conversion": "half-up-preserve-zero-clamp-positive-reject-overflow",
+        "sdk_mm_conversion_complete": true,
+        "sdk_mm_overflow": 0,
+        "sdk_nonzero": 304083,
+        "sdk_only": 197040,
+        "sdk_z_semantics": "SDK-reported-not-assumed-equivalent"
+      },
+      "scalar_result": {
+        "collisions": 0,
+        "complete": true,
+        "invalid_ray": 0,
+        "occluded": 0,
+        "out_of_bounds": 126665,
+        "output_semantics": "color-camera-Z-u16-millimetres",
+        "physical_accuracy_verified": false,
+        "source_pixels": 256000,
+        "target_grid": "sdk-aligned-output-profile",
+        "valid_output": 107043,
+        "version": 1,
+        "zero_depth": 22292
+      },
+      "target_grid": "sdk-aligned-output-profile"
+    }
+  ],
+  "physical_accuracy_verified": false,
+  "scope": "Sequential single-frame SDK algorithm comparison; not physical, scale, performance or release acceptance",
+  "sdk_equivalence_verified": false,
+  "hardware_sync_verified": false
+}

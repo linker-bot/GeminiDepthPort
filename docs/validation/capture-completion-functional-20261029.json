@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "kind": "capture-functional-validation",
+  "date": "2026-10-29",
+  "production_camera_limit": 3,
+  "multi_camera_runner": {
+    "simulated": true,
+    "cameras": 4,
+    "actual_scale_acceptance_executed": false
+  },
+  "native_counts": {
+    "actual_device": true,
+    "frames": 10,
+    "source_scale_mm": 0.10000000149011612,
+    "decoded_png_pixel_exact": true,
+    "directory_tar_png_bytes_equal": true,
+    "one_byte_budget_failed_explicitly": true
+  },
+  "ros_consumer": {
+    "actual_device": true,
+    "seconds": 5,
+    "native_recording_pairs": 300,
+    "strict_rgbd_metadata_tf_passed": true
+  },
+  "rosbag_cdr": {
+    "sqlite3": true,
+    "mcap": true,
+    "original_cdr_preserved": true
+  },
+  "native_recovery": {
+    "one_restart_acceptance": {
+      "Gemini 305": false,
+      "Gemini 335L": false
+    },
+    "explicit_three_restart_budget": {
+      "Gemini 305": {
+        "passed": true,
+        "actual_restart_delta": 2,
+        "failed_reopen_attempts": 1
+      },
+      "Gemini 335L": {
+        "passed": true,
+        "actual_restart_delta": 2,
+        "failed_reopen_attempts": 1
+      }
+    },
+    "protected_reopen_blocked": true,
+    "wrong_credentials_refused": true,
+    "final_process_group_binary_retested_on": "Gemini 335L",
+    "sdk_first_reopen_limitation_fixed": false
+  },
+  "actual_management_flow": {
+    "camera_count": 1,
+    "profile": "Gemini 335L",
+    "preview_confirm": true,
+    "quality_apis": true,
+    "strong_ack_snapshot_context": true,
+    "guard_interlock": true,
+    "credentialed_release": true,
+    "normal_down": true,
+    "persistent_historical_summary": true,
+    "cleanup_ok": true
+  },
+  "offline_checks": {
+    "python_passed": 272,
+    "python_skipped": 2,
+    "cli_http_passed": 33,
+    "linux_supervision_passed": 10,
+    "linux_group_ownership_passed": 1,
+    "linux_management_lifecycle_passed": 6,
+    "rust_workspace_passed": true,
+    "strict_clippy_msrv_passed": true
+  },
+  "physical_accuracy_verified": false,
+  "hardware_sync_verified": false,
+  "scale_release_acceptance_executed": false,
+  "thirty_minute_soak_executed": false,
+  "performance_comparison_executed": false,
+  "rebuilt_official_driver_real_device_acceptance_executed": false
+}

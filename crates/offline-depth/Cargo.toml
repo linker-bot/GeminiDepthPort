@@ -6,6 +6,8 @@ rust-version = "1.85"
 license = "Apache-2.0"
 [dependencies]
 capture-contract = { path = "../capture-contract" }
+capture-observer = { path = "../capture-observer" }
+quality-core = { path = "../quality-core" }
 frame-core = { path = "../frame-core" }
 d2c-core = { path = "../d2c-core" }
 depth-output = { path = "../depth-output" }

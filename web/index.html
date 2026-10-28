@@ -23,5 +23,6 @@
 <button id="confirm" class="full">检查出帧并确认此档位</button><p class="muted">检查尺寸、时间戳、最低帧率与新鲜度。浏览器预览最高 5 FPS，不代表采集帧率。</p></section>
 </div>
 <section class="deployment"><div class="section-heading"><h2>04 <span>部署与启动检查</span></h2><span id="job-status" class="badge">空闲</span></div><div class="deployment-actions"><button data-action="build">构建镜像</button><button data-action="render">生成部署配置</button><button data-action="preflight">部署预检</button><button data-action="up" class="primary">检查并启动相机组</button><button data-action="check">检查运行画面</button><button data-action="down" class="danger">停止正式服务</button></div><div id="services" class="service-list">尚未读取服务状态</div><pre id="logs" tabindex="0" aria-label="操作日志">所有检查都在 Linux 主机上执行。这里会显示操作结果。</pre></section>
+<section class="card"><h2>采集质量事实</h2><button id="refresh-quality" type="button">读取当前概要</button><pre id="quality-summary">尚未读取；质量事件不替代业务有效性判断。</pre></section>
 <footer><span>三机配置 · 独立绑定 · RGB-D</span><span>仅本机访问 · 配置按序列号绑定</span></footer>
 </main></body></html>

@@ -46,6 +46,10 @@ enum Command {
     Query {
         request: QualityQueryRequest,
     },
+    Interrupt {
+        at: MonoTime,
+        reason: quality_core::InterruptionReason,
+    },
     Finalize,
 }
 fn reply(observer: &mut CaptureObserver, line: &[u8]) -> Result<serde_json::Value, &'static str> {
@@ -76,6 +80,10 @@ fn reply(observer: &mut CaptureObserver, line: &[u8]) -> Result<serde_json::Valu
             return Ok(
                 json!({"version":1,"ok":true,"kind":"query","result":observer.query(request)?}),
             );
+        }
+        Command::Interrupt { at, reason } => {
+            observer.interrupt(at, reason)?;
+            return Ok(json!({"version":1,"ok":true,"kind":"interrupted"}));
         }
         Command::Finalize => {
             return Ok(

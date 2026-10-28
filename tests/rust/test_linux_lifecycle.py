@@ -28,6 +28,18 @@ identity() {
   esac
   if [ "$name" = camera_a ] && [ -f replace-camera-a ]; then id=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd; fi
 }
+observer_status() {
+  generation=$(sed -n 's/.*"generation": "\([a-f0-9]*\)".*/\1/p' state/current-generation.json)
+  config_hash=$(sha256sum "state/generations/$generation/config/$name/observer-policy.json" | cut -d ' ' -f 1)
+  session=$(printf '%.32s' "$id")
+  updated=$(($(date +%s)*1000))
+  printf '{"version":1,"kind":"official-observer-status","ready":true,"state":"ready","pid":1,"driver_pid":2,"instance_id":"%s","session_id":"%s","session_kind":"observer","native_session_verified":false,"generation":"%s","config_sha256":"%s","snapshot_id":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","snapshot_path":"/tmp/capture-observer/snapshots/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.json","updated_unix_ms":%s,"received_counts":{"color":100,"depth":100}}' "$id" "$session" "$generation" "$config_hash" "$updated"
+}
+observer_quality() {
+  session=$(printf '%.32s' "$id")
+  status=$(observer_status)
+  printf '{"status":%s,"current":{"version":1,"instance_id":"%s","session_id":"%s","snapshot_id":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","quality":{"version":1,"origin_session_id":"%s","session_id":"%s","state":"normal","active_episodes":[],"finalized_sessions":[],"latest_event_sequence":0,"current_session_finalized":false,"at":{"session_id":"%s","offset_ns":1}}},"events":{"version":1,"origin_session_id":"%s","latest_sequence":0,"gap":null,"events":[],"next_cursor":{"origin_session_id":"%s","after_sequence":0},"has_more":false},"summary":null,"processes_alive":true}' "$status" "$id" "$session" "$session" "$session" "$session" "$session" "$session"
+}
 case "$1" in
   info) exit 0;;
   image) cat image.json; exit 0;;
@@ -67,6 +79,8 @@ case "$1" in
     esac;;
   exec)
     case "$*" in
+      *"backend=sys.argv[1]"*) identity "$2"; observer_quality;;
+      *"/tmp/capture-observer/status.json"*) identity "$2"; observer_status;;
       *calibration_export.py*)
         event calibration:collect
         if [ -f fail-calibration ]; then exit 1; fi
@@ -118,7 +132,7 @@ class LinuxLifecycleTests(unittest.TestCase):
         (self.root/'bin/docker').write_text(DOCKER_DOUBLE);(self.root/'bin/docker').chmod(0o755)
         manifest=json.loads((BASE/'patches/public-orbbec/manifest.json').read_text())
         labels={'org.opencontainers.image.revision':self.data['upstream_commit'],
-            'org.geminidepthport.explicit-bindings':'1','org.geminidepthport.native-yuyv':'1',
+            'org.geminidepthport.explicit-bindings':'1','org.geminidepthport.official-observer':'v1','org.geminidepthport.native-yuyv':'1',
             'org.geminidepthport.native-yuyv-patch':manifest['patch_sha256'],
             'org.geminidepthport.communication-profile':'humble-fastdds-local-udp-v1'}
         (self.root/'image.json').write_text(json.dumps([{'Config':{'Labels':labels}}]))

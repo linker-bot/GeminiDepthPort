@@ -17,3 +17,4 @@ frame-core = { path = "../frame-core" }
 orbbec-safe = { path = "../orbbec-safe" }
 ros-output = { path = "../ros-output" }
 quality-core = { path = "../quality-core" }
+offline-depth = { path = "../offline-depth" }

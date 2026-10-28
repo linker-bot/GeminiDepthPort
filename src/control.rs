@@ -37,6 +37,7 @@ impl Controller {
             .create(true)
             .truncate(false)
             .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(self.root.join("state/control.lock"))?;
         require(
             unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
@@ -349,6 +350,7 @@ impl Controller {
         Ok(())
     }
     pub fn preflight(&self, d: &Value) -> Result<()> {
+        crate::usbfs::preflight(d)?;
         self.assert_no_previews()?;
         self.check_render(d)?;
         require(
@@ -381,6 +383,19 @@ impl Controller {
         self.run(&["docker", "info"])?;
         self.compose(&["config", "--quiet"])?;
         self.image_contract(d)?;
+        if self.check_render(d)?["observer_backend"] == "ros-observed-v1" {
+            let inspected: Value = serde_json::from_str(&self.run(&[
+                "docker",
+                "image",
+                "inspect",
+                text(&d["image"]),
+            ])?)?;
+            require(
+                inspected[0]["Config"]["Labels"]["org.geminidepthport.official-observer"] == "v1",
+                "OFFICIAL_OBSERVER_IMAGE_REQUIRED",
+                "Rebuild the official image with observer lifecycle support",
+            )?;
+        }
         if capture_backend::selected(d) == "rust" {
             let current = self.check_render(d)?;
             require(
@@ -517,6 +532,25 @@ impl Controller {
             "python3",
             "/app/health.py",
         ])?;
+        let d = self.load()?;
+        if capture_backend::selected(&d) != "rust"
+            && self.check_render(&d)?["observer_backend"] == "ros-observed-v1"
+        {
+            let name = service
+                .strip_prefix("camera_")
+                .ok_or_else(|| anyhow::anyhow!("OBSERVER_SERVICE_BINDING"))?;
+            let observed = crate::managed_quality::query(self, name, "current", None, 1)?;
+            require(
+                observed["worker_ready"] == true
+                    && observed["session_kind"] == "observer"
+                    && observed["snapshot_id"].as_str().is_some()
+                    && observed["status_age_ms"]
+                        .as_f64()
+                        .is_some_and(|age| age <= 2000.),
+                "OFFICIAL_OBSERVER_NOT_READY",
+                "A ready observed session with a fresh heartbeat is required",
+            )?;
+        }
         Ok(())
     }
     pub fn ensure_started(&self, d: &Value) -> Result<Value> {
@@ -647,7 +681,9 @@ impl Controller {
             &self.root.join("state/recording-guard.json"),
             &json!({"version":1,"generation":s["generation"],"token_sha256":hash(&token)}),
         )?;
-        Ok(json!({"token":token}))
+        Ok(
+            json!({"token":token,"guard_version":1,"native_restart_gate":false,"session_bound":false}),
+        )
     }
     pub fn release(&self, token: &str) -> Result<()> {
         let path = self.root.join("state/recording-guard.json");

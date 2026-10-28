@@ -1,3 +1,11 @@
+FROM rust:1.85.1-bullseye AS observer-build
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY driver_profiles.json ./driver_profiles.json
+COPY crates ./crates
+RUN cargo build --locked --release -p capture-observer -p geminidepthport --bin capture-observer --bin observer-bootstrap
+
 FROM ros:humble-ros-base-jammy
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ORBBEC_COMMIT
@@ -54,6 +62,9 @@ RUN architecture="$(dpkg --print-architecture)" \
          /opt/geminidepthport/tests/cpp/native_yuyv_sdk_test.cpp \
          -L"$sdk/lib" -lOrbbecSDK -Wl,-rpath,"$sdk/lib" -o /opt/native-yuyv-sdk-test \
     && /opt/native-yuyv-sdk-test
+COPY --from=observer-build /build/target/release/capture-observer /usr/local/bin/capture-observer
+COPY --from=observer-build /build/target/release/observer-bootstrap /usr/local/bin/observer-bootstrap
+LABEL org.geminidepthport.official-observer="v1"
 COPY runtime /app
 COPY driver_profiles.json /app/driver_profiles.json
 COPY tests/ros_native_yuyv_smoke.py /opt/geminidepthport/tests/ros_native_yuyv_smoke.py

@@ -694,6 +694,54 @@ fn handle(mut req: Request, m: &Arc<Manager>, port: u16) {
             match path {
                 "/healthz" => json(200, json!({"status":"ok"})),
                 "/api/state" => json(200, state(m)?),
+                "/api/usbfs" => json(200, crate::usbfs::status(&m.ctl.load()?)),
+                "/api/recording-context" => json(
+                    200,
+                    crate::managed_quality::recording_context(
+                        &m.ctl,
+                        get("require_strong") == "true",
+                    )
+                    .map_err(crate::managed_quality::public_error)?,
+                ),
+                "/api/quality/current" | "/api/quality/events" | "/api/quality/session-summary" => {
+                    if path == "/api/quality/session-summary"
+                        && (!get("generation").is_empty() || !get("session").is_empty())
+                    {
+                        return json(
+                            200,
+                            crate::quality_history::read(
+                                &m.ctl,
+                                get("camera"),
+                                get("generation"),
+                                get("session"),
+                            )?,
+                        );
+                    }
+                    let cursor = if get("cursor").is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::from_value(capture_contract::parse_strict(
+                            get("cursor").as_bytes(),
+                        )?)?)
+                    };
+                    let limit = if get("limit").is_empty() {
+                        50
+                    } else {
+                        get("limit").parse::<usize>()?
+                    };
+                    json(
+                        200,
+                        crate::managed_quality::query(
+                            &m.ctl,
+                            get("camera"),
+                            path.rsplit('/').next().unwrap(),
+                            cursor,
+                            limit,
+                        )
+                        .map_err(crate::managed_quality::public_error)?,
+                    )
+                }
+
                 "/api/preview/logs" => {
                     let name = get("role");
                     role(&m.ctl.load()?, name)?;

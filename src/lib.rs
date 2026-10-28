@@ -8,3 +8,11 @@ pub mod util;
 
 pub mod capture_snapshot;
 pub mod recording;
+
+pub mod usbfs;
+
+pub mod official_observer;
+
+pub mod managed_quality;
+
+pub mod quality_history;

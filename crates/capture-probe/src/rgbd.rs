@@ -261,6 +261,22 @@ pub(crate) fn packet(
     received_at: Instant,
     metrics: &mut Metrics,
 ) -> Result<FramePacket<Storage>> {
+    Ok(packet_measured(frame, config, depth, normalize, received_at, metrics, false)?.packet)
+}
+pub(crate) struct MeasuredPacket {
+    pub packet: FramePacket<Storage>,
+    pub source_pixels: Option<frame_core::DepthSampleStats>,
+    pub output_pixels: Option<frame_core::DepthSampleStats>,
+}
+pub(crate) fn packet_measured(
+    frame: Frame,
+    config: &StreamConfig,
+    depth: bool,
+    normalize: bool,
+    received_at: Instant,
+    metrics: &mut Metrics,
+    measure: bool,
+) -> Result<MeasuredPacket> {
     let source = frame.metadata()?;
     let expected = if depth { Format::Depth16 } else { Format::Yuyv };
     ensure!(
@@ -285,6 +301,8 @@ pub(crate) fn packet(
         "SDK payload size mismatch"
     );
     let source_scale = if depth { source.depth_scale_mm } else { None };
+    let mut source_pixels = None;
+    let mut output_pixels = None;
     let storage = if depth && normalize {
         let start = Instant::now();
         let converted = frame_core::normalize_depth_mm(
@@ -296,6 +314,10 @@ pub(crate) fn packet(
         metrics.normalization_ns += start.elapsed().as_nanos();
         let converted = converted?;
         layout.validate(converted.bytes.len())?;
+        if measure {
+            source_pixels = Some(converted.stats.source_samples());
+            output_pixels = Some(converted.stats.output_samples());
+        }
         metrics.normalization_frames += 1;
         metrics.normalization_pixels +=
             converted.stats.zero_samples + converted.stats.nonzero_samples;
@@ -307,13 +329,22 @@ pub(crate) fn packet(
             !depth || source_scale == Some(1.0),
             "raw depth is not millimeter"
         );
+        if depth && measure {
+            let stats = frame_core::measure_depth_samples(frame.data()?, layout, false)?;
+            source_pixels = Some(stats);
+            output_pixels = Some(stats);
+        }
         Storage::Sdk(frame)
     };
     let metadata = make_metadata(source, layout, depth, normalize, received_at);
     metadata.validate(storage.data()?.len())?;
-    Ok(FramePacket {
-        metadata,
-        payload: storage,
+    Ok(MeasuredPacket {
+        packet: FramePacket {
+            metadata,
+            payload: storage,
+        },
+        source_pixels,
+        output_pixels,
     })
 }
 fn make_metadata(

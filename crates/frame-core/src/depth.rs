@@ -4,6 +4,8 @@ use std::{error::Error, fmt};
 /// Counts and extrema of the returned millimetre image, excluding row padding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DepthStats {
+    pub source_max_u16_samples: u64,
+    pub output_max_u16_samples: u64,
     pub zero_samples: u64,
     pub nonzero_samples: u64,
     /// Nonzero source samples which rounded below 1 mm and were raised to 1 mm.
@@ -78,6 +80,8 @@ pub fn normalize_depth_mm(
     let output_len = row_bytes * layout.height as usize;
     let mut bytes = Vec::with_capacity(output_len);
     let mut stats = DepthStats {
+        source_max_u16_samples: 0,
+        output_max_u16_samples: 0,
         zero_samples: 0,
         nonzero_samples: 0,
         clamped_samples: 0,
@@ -92,6 +96,9 @@ pub fn normalize_depth_mm(
             } else {
                 u16::from_le_bytes([pair[0], pair[1]])
             };
+            if raw == u16::MAX {
+                stats.source_max_u16_samples += 1;
+            }
             let mm = if raw == 0 {
                 stats.zero_samples += 1;
                 0
@@ -108,6 +115,9 @@ pub fn normalize_depth_mm(
                     rounded as u16
                 }
             };
+            if mm == u16::MAX {
+                stats.output_max_u16_samples += 1;
+            }
             stats.min_mm = Some(stats.min_mm.map_or(mm, |value| value.min(mm)));
             stats.max_mm = Some(stats.max_mm.map_or(mm, |value| value.max(mm)));
             bytes.extend_from_slice(&mm.to_le_bytes());
@@ -147,6 +157,8 @@ mod tests {
         assert_eq!(
             result.stats,
             DepthStats {
+                source_max_u16_samples: 1,
+                output_max_u16_samples: 1,
                 zero_samples: 1,
                 nonzero_samples: 65_535,
                 clamped_samples: 0,
@@ -259,5 +271,98 @@ mod tests {
         let all_zero = normalize_depth_mm(&[0; 4], layout(2, 1, 4), false, 0.1).unwrap();
         assert_eq!(all_zero.stats.min_mm, Some(0));
         assert_eq!(all_zero.stats.max_mm, Some(0));
+    }
+}
+
+/// Numerical source/output sample counts, independent of unit scale or physical validity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DepthSampleStats {
+    pub samples: u64,
+    pub zero_samples: u64,
+    pub nonzero_samples: u64,
+    pub max_u16_samples: u64,
+}
+impl DepthStats {
+    pub fn source_samples(self) -> DepthSampleStats {
+        DepthSampleStats {
+            samples: self.zero_samples + self.nonzero_samples,
+            zero_samples: self.zero_samples,
+            nonzero_samples: self.nonzero_samples,
+            max_u16_samples: self.source_max_u16_samples,
+        }
+    }
+    pub fn output_samples(self) -> DepthSampleStats {
+        DepthSampleStats {
+            max_u16_samples: self.output_max_u16_samples,
+            ..self.source_samples()
+        }
+    }
+}
+pub fn measure_depth_samples(
+    source: &[u8],
+    layout: FrameLayout,
+    big_endian: bool,
+) -> Result<DepthSampleStats, DepthNormalizationError> {
+    if layout.format != PixelFormat::Depth16 {
+        return Err(DepthNormalizationError::NotDepth16);
+    }
+    layout
+        .validate(source.len())
+        .map_err(DepthNormalizationError::Layout)?;
+    let mut result = DepthSampleStats {
+        samples: 0,
+        zero_samples: 0,
+        nonzero_samples: 0,
+        max_u16_samples: 0,
+    };
+    for row in source.chunks_exact(layout.stride) {
+        for pair in row[..layout.width as usize * 2].chunks_exact(2) {
+            let value = if big_endian {
+                u16::from_be_bytes([pair[0], pair[1]])
+            } else {
+                u16::from_le_bytes([pair[0], pair[1]])
+            };
+            result.samples += 1;
+            if value == 0 {
+                result.zero_samples += 1
+            } else {
+                result.nonzero_samples += 1;
+            }
+            if value == u16::MAX {
+                result.max_u16_samples += 1;
+            }
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod measurement_tests {
+    use super::*;
+    #[test]
+    fn source_and_normalized_boundaries_are_distinct_and_padding_endian_are_explicit() {
+        let layout = FrameLayout {
+            width: 2,
+            height: 2,
+            stride: 6,
+            format: PixelFormat::Depth16,
+        };
+        let raw = [0, 0, 255, 255, 99, 98, 0, 1, 0, 2, 88, 87];
+        let measured = measure_depth_samples(&raw, layout, true).unwrap();
+        assert_eq!(
+            measured,
+            DepthSampleStats {
+                samples: 4,
+                zero_samples: 1,
+                nonzero_samples: 3,
+                max_u16_samples: 1
+            }
+        );
+        let normalized = normalize_depth_mm(&raw, layout, true, 0.1).unwrap();
+        assert_eq!(normalized.stats.source_samples(), measured);
+        assert_eq!(normalized.stats.output_samples().max_u16_samples, 0);
+        assert!(measure_depth_samples(&raw[..11], layout, true).is_err());
+        assert_eq!(raw[4], 99);
+        assert_eq!(raw[10], 88);
     }
 }
