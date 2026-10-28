@@ -1,3 +1,9 @@
+//! Loopback management HTTP API, background tasks and preview leases.
+//!
+//! Mutating handlers coordinate the control lock and recording protection;
+//! long-running operations report task results rather than imply readiness from
+//! request acceptance. Preview leases expire independently of browser lifetime.
+//! Keep producer quality facts distinct from downstream recording validity.
 use crate::{
     config,
     control::{Controller, PROJECT},

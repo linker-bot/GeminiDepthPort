@@ -1,3 +1,9 @@
+//! Immutable generation bundles and their active pointer.
+//!
+//! `load` verifies the pointer, manifest and bound configuration files; it does
+//! not establish live camera readiness. Creation writes and validates a private
+//! bundle before activating it. Callers must hold the control mutation lock;
+//! source-byte checks detect inventory drift but do not lock external editors.
 use crate::{capture_backend, config, control::Controller, util::*};
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -6,6 +12,8 @@ use std::{
     path::{Component, Path},
 };
 pub const KIND: &str = "geminidepthport-generation-v1";
+/// Return the verified active bundle, or `None` when no active pointer exists.
+/// Malformed or changed bundles fail instead of falling back to another version.
 pub fn load(ctl: &Controller) -> Result<Option<Value>> {
     load_inner(ctl).map_err(|e| {
         if e.to_string().starts_with("GENERATION_") {
@@ -202,7 +210,8 @@ pub fn camera_files(d: &Value, c: &Value) -> Result<(Value, Value, Value)> {
     h["streams"] = json!(streams);
     Ok((p, h, binding))
 }
-// JSON is a YAML 1.2 subset; safe_load and Compose accept these .yaml files.
+/// Generate and validate a bundle from the saved inventory, then activate it.
+/// Caller holds the mutation lock. Generated `.yaml` files use JSON, a YAML 1.2 subset.
 pub fn create(ctl: &Controller, d: &Value, draft: bool) -> Result<Value> {
     config::validate(d, draft)?;
     let source = fs::read(ctl.root.join("inventory.json"))?;

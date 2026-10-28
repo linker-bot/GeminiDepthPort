@@ -1,4 +1,8 @@
-# Experimental ROS output bridge
+# ROS Humble output bridge
+
+This bridge supports the optional [Rust capture backend](../docs/guides/rust-backend.md).
+Its checks and hardware acceptance limits are described below and in the
+[validation index](../docs/validation/README.md).
 
 This is a thin ROS Humble `rclcpp` publisher behind the versioned C ABI in
 `include/gdp_ros_bridge.h`. Acquisition and SDK frame lifetime remain in Rust.

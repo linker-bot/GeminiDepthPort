@@ -56,7 +56,7 @@ bridge 同步复制并发布 Image、CameraInfo 和帧/配对证据，SDK 缓冲
 ## 许可证与离线组装
 
 采集镜像在构建时收集完整 SDK 许可目录并核对固定许可文本。
-`offline.Dockerfile` 的受控上下文也必须包含来自本仓库的
+[`scripts/capture-runtime/offline.Dockerfile`](../../scripts/capture-runtime/offline.Dockerfile) 的受控上下文也必须包含来自本仓库的
 `licenses/orbbec-sdk-v2.10.6/`，放在上下文的 `sdk-license/`，以及匹配的
 `capture-runtime/` 脚本。SDK 仍取自已验证的官方镜像，不复制宿主机 SDK。
 许可包缺失会阻止组装；完整范围见[第三方说明](../../THIRD_PARTY_NOTICES.md)。

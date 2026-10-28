@@ -1,3 +1,10 @@
+//! Host lifecycle operations over one canonical deployment root.
+//!
+//! CLI/Web callers serialize mutations with `Controller::lock(true)`, which also
+//! rejects recording protection. Helpers do not acquire that lock themselves.
+//! Operations may invoke Docker/Compose and write private state; failed group
+//! startup can leave owned instances running for diagnosis. Container ownership
+//! and stop behavior are defined in `docs/guides/lifecycle.md`.
 use crate::{capture_backend, config, generation, util::*};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
@@ -29,6 +36,8 @@ impl Controller {
             root: root.as_ref().canonicalize()?,
         })
     }
+    /// Acquire the nonblocking deployment lock; retain the guard for the operation.
+    /// With `mutation`, reject an existing recording guard before returning.
     pub fn lock(&self, mutation: bool) -> Result<ControlLock> {
         private_dir(&self.root.join("state"))?;
         let f = OpenOptions::new()
@@ -129,6 +138,8 @@ impl Controller {
     pub fn save(&self, data: &Value, confirmed: bool) -> Result<()> {
         self.save_at_revision(data, confirmed, &self.revision()?)
     }
+    /// Save only while the source revision still matches, invalidating stale checks.
+    /// Caller holds the mutation lock; external editors are not serialized by it.
     pub fn save_at_revision(&self, data: &Value, confirmed: bool, expected: &str) -> Result<()> {
         let source = fs::read(self.root.join("inventory.json"))?;
         require(

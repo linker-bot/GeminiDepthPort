@@ -1,21 +1,13 @@
-# Generic provider interfaces: implementation and acceptance checklist
+# Provider interfaces v1
 
-These tasks are additive public software capabilities. They contain no deployment
-bindings, device identities, private geometry, recorder policy or application
-output conventions. This change does not claim hardware or production acceptance.
+This contract defines capability negotiation, build identity, offline job control
+and bounded quality queries. Deployment bindings, recorder policy and application
+output conventions belong to callers. Software checks do not establish hardware
+or production acceptance.
 
-## Task 1 — capability negotiation and offline build identity
+## Capability negotiation and offline build identity
 
-Status: implemented, software acceptance covered by automated tests.
-
-Files:
-
-- `crates/capture-contract/build.rs`, `src/capabilities.rs`, `src/lib.rs` in that crate.
-- `src/main.rs`, `src/server.rs`.
-- `crates/offline-depth/src/main.rs`, `src/lib.rs`, `src/recording.rs`.
-- `crates/depth-output/src/lib.rs`, dependency metadata and lockfile.
-
-Interfaces:
+### Discovery commands
 
 ```sh
 geminidepthport capabilities
@@ -51,7 +43,7 @@ Offline success reports add `build` and `d2c_diagnostics`; old report versions a
 fields retain their existing meanings. Each export also saves `build-info.json`,
 including numerical algorithm declarations, independently of the source snapshot.
 
-Acceptance:
+### Acceptance requirements
 
 - Both CLIs answer without input recordings or hardware; management CLI answers
   even when the specified deployment root does not exist and leaves it absent.
@@ -60,12 +52,7 @@ Acceptance:
 - Exported build identity equals the executing CLI report; source snapshot and
   evidence identities remain untouched. Old CLI/recording tests continue passing.
 
-## Task 2 — D2C diagnostics
-
-Status: implemented, software acceptance covered by numerical and CLI tests.
-
-Files: `crates/offline-depth/src/lib.rs`, `src/recording.rs`, `src/job_control.rs`,
-`crates/depth-output/src/lib.rs` and their integration tests.
+## D2C diagnostics
 
 Each D2C output ordinal has a private immutable
 `d2c-diagnostics-{ordinal:020}.json` sidecar containing version, algorithm version,
@@ -82,7 +69,7 @@ last successfully decoded pair caused a later source-read error. Public stdout
 continues to omit source paths, IDs, serials and calibration values. Private
 sidecars are not suitable for public issue attachments without redaction.
 
-Acceptance:
+### Acceptance requirements
 
 - Known translated geometry produces expected color-Z and exact counters.
 - v1 and v2 export paths retain diagnostics and build identity without changing
@@ -93,12 +80,7 @@ Acceptance:
   or use arbitrary names; a racing final destination leaves no prepared COMPLETE
   marker in the failed partial directory and does not alter the destination.
 
-## Task 3 — offline progress and cooperative cancellation
-
-Status: implemented, including actual SIGTERM subprocess acceptance.
-
-Files: `crates/offline-depth/src/job_control.rs`, `src/main.rs`, `src/lib.rs`,
-`src/recording.rs`, `crates/offline-depth/Cargo.toml`, `Cargo.lock`.
+## Offline progress and cooperative cancellation
 
 CLI: optional `--progress /absolute/new-progress.jsonl`; its parent must exist.
 The file uses exclusive creation and owner-only permissions. It cannot replace
@@ -130,7 +112,7 @@ after an otherwise successful operation is `PROGRESS_FINALIZATION_UNCERTAIN`;
 inspect the actual output before retrying. Existing `OUTPUT_COMMIT_UNCERTAIN`
 semantics remain in effect for directory durability uncertainty.
 
-Acceptance:
+### Acceptance requirements
 
 - A real CLI child receiving SIGTERM reports cancellation and has no completed
   output; direct library cancellation is also covered.
@@ -138,13 +120,10 @@ Acceptance:
 - Existing paths/relative progress paths fail without overwriting source files.
 - Existing queue, byte-preservation, no-replace and failure tests still pass.
 
-## Task 4 — bounded batch quality reads and cursor windows
+## Bounded batch quality reads and cursor windows
 
-Status: implemented; query semantics and actual HTTP transport are tested.
-
-Files: `src/quality_batch.rs`, `src/lib.rs`, `src/main.rs`, `src/server.rs`,
-`tests/provider_capabilities.rs`. Existing `managed_quality::query` remains the
-single authority for producer validation, privacy and event-page continuity.
+Batch and window reads use the same producer validation, privacy and event-page
+continuity rules as [individual quality queries](../interfaces/quality.md).
 
 CLI:
 
@@ -185,12 +164,12 @@ incomplete window, not a successful read or an invented acknowledgement.
 Session changes and
 wrong cursor origins fail, never stitch sessions or hide unknown scopes.
 
-This initial interface operates on current retained feeds. Existing explicit
+The interface operates on current retained feeds. Existing explicit
 historical session-summary queries remain available; full historical event
 window reconstruction is not promised. Retention is bounded by producer history,
 and EVENT_GAP remains an explicit incomplete result.
 
-Acceptance:
+### Acceptance requirements
 
 - Group limit, duplicates, cursor origins and per-page bounds are enforced.
 - Every before/events/after identity must match; any mismatch rejects the batch.

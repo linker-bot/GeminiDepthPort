@@ -29,6 +29,9 @@ output/job arguments. Duplicate/unknown arguments and ambiguous operations fail.
 There are no devices, profile fallbacks, network lookups or timestamps invented
 by the CLI.
 
+For streaming recording directories, use `--recording-v2`; the input schema and
+original evidence retention are defined in [Recording directory v2](RECORDING-V2.md).
+
 ## Directory FrameSource version 1
 
 The directory must contain `manifest.json` using this exact typed structure:
@@ -81,9 +84,17 @@ promoted from f32 to f64. For preserved SDK counts, use:
 
 That example is the exact f64 promotion of SDK `0.1f32`; adapters must preserve
 the actual source precision instead of rounding calibration/unit evidence.
-Never relabel SDK count bytes as millimetres. Original count export requires
-explicit `--normalize-mm`; it rounds half up, preserves raw zero, clamps
-positive submillimetre values to 1 mm and rejects frame overflow. D2C explicitly
+Never relabel SDK count bytes as millimetres. Choose one operation:
+
+- `--preserve-counts` retains native u16 counts and their explicit scale. It
+  requires SDK-count input; normalized millimetres cannot recover native counts.
+- `--normalize-mm` converts counts to millimetres: it rounds half up, preserves
+  raw zero, clamps positive submillimetre values to 1 mm and rejects frame overflow.
+- `--d2c` projects depth into the color camera using the snapshot calibration.
+
+These flags are mutually exclusive. Without a conversion flag, original output
+requires a source scale of exactly 1 mm per stored value; other scales require
+explicit normalization. D2C explicitly
 consumes the declared source scale and quantizes only final color-Z winners;
 `--d2c --normalize-mm` is rejected to prevent an unrequested double stage.
 `--normalize-mm` is harmless for input already in millimetres.
@@ -109,13 +120,17 @@ A successful job is one new directory containing `COMPLETE`,
 `manifest.jsonl`, requested PNG/TAR output, `snapshot.json`, and exact evidence
 copies named `pair-evidence-{pair_sequence:020}.json`. Each output frame's record
 links the original depth context, pair sequence, evidence SHA256, and kind
-`original_millimetres` or `d2c_color_z_millimetres`. D2C output dimensions belong
+`original_millimetres`, `original_sdk_counts` or `d2c_color_z_millimetres`.
+D2C output dimensions belong
 to the color model, while its source context remains the original depth context.
 The manifest's output dimensions/kind identify this derivation. The exported
 snapshot still describes the **source representation**, not a newly acquired
-millimetre frame. Sidecars permit hash resolution after the source is removed.
+output frame. Sidecars permit hash resolution after the source is removed.
 
-All output PNGs are grayscale u16 millimetres, with 0 invalid. TAR and directory
+PNG output is grayscale u16, with 0 invalid. Default, normalized and D2C outputs
+use millimetres; `--preserve-counts` uses `sdk-counts` with an explicit
+`original_sdk_counts {scale_mm}` manifest entry. PNG values must be interpreted
+with that declared representation. TAR and directory
 modes use identical PNG bytes. Jobs never overwrite previous complete or partial
 jobs. Writer/reader/conversion failure returns nonzero, prints a stable redacted
 JSON `complete:false`, and retains an unfinished `.partial` directory when one
@@ -159,5 +174,5 @@ supported version without fallback. `--version` reports executable build identit
 Successful jobs retain `build-info.json` and per-frame D2C diagnostic sidecars.
 Optional `--progress /absolute/new-progress.jsonl` records bounded-rate progress;
 SIGINT/SIGTERM request cooperative cancellation before commit. Resume remains
-unsupported. See the [complete interface and acceptance checklist](../../docs/contracts/provider-capabilities-v1.md)
+unsupported. See the [provider interface contract](../../docs/contracts/provider-capabilities-v1.md)
 for failure, privacy, signal and commit-uncertainty boundaries.

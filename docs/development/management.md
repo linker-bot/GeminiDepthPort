@@ -6,7 +6,7 @@
 
 ## 模块
 
-- `src/config.rs`：schema 校验、迁移和确认摘要。
+- `src/config.rs`：schema 校验、确认摘要、配置变更失效和纯迁移预览。
 - `src/generation.rs`：配置生成、产物清单与当前版本指针。
 - `src/control.rs`：操作锁、设备发现、容器归属和受检生命周期。
 - `src/server.rs`：本机 Web、请求保护、任务和预览。

@@ -1,4 +1,5 @@
-//! Lossless storage of already-normalized u16 millimetres. No SDK-count conversion.
+//! Lossless u16 depth storage: millimetres or native counts with explicit scale.
+//! The caller supplies the representation; encoding performs no unit conversion.
 //! A completed job is committed as one directory; incomplete jobs retain `.partial`.
 use capture_contract::{FrameContext, SnapshotId};
 use serde::{Deserialize, Serialize};

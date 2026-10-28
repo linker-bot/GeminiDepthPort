@@ -1,5 +1,7 @@
 # GeminiDepthPort
 
+![奥比中光与灵心巧手二次元角色在科技工坊中协作，展示视觉识别与灵巧抓取](docs/images/banner.png)
+
 Orbbec Gemini RGB-D 相机采集服务，提供本地 Web 配置、独立相机容器与受检生命周期管理。
 支持一至三台启用设备；默认提供三个未绑定、未启用的配置槽位。
 

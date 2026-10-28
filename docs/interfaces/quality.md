@@ -32,7 +32,9 @@ may expose terminal/degraded facts while the container supervisor is running;
 `worker_ready` and `status_age_ms` distinguish them from live capture. A live
 session without a finalized summary reports `available=false`; it never
 manufactures a successful finalization. Stopped containers cannot be treated as
-live evidence, and callers should export finalized facts before removal.
+live evidence. For generations with persistent evidence mounts, finalized facts
+remain accessible through [explicit historical queries](#persistent-session-history)
+after container removal; earlier tmpfs-only evidence must be exported first.
 
 `recording-context` contains full immutable snapshot envelopes and identity
 bindings plus controlled quality endpoints. Treat it as a private recording

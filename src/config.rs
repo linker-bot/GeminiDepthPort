@@ -1,3 +1,8 @@
+//! Inventory validation, migration plans and confirmation invalidation.
+//!
+//! Draft acceptance permits incomplete configuration, not capture readiness.
+//! Confirmation digests bind settings to recorded checks; they are drift
+//! detectors, not signatures or physical calibration certificates.
 use crate::util::*;
 use anyhow::Result;
 use serde_json::{Value, json};

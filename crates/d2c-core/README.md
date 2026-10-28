@@ -58,7 +58,7 @@ be imposed independently.
 Tests are artificial geometry fixtures, not SDK-derived goldens or physical
 camera validation. `cargo test -p d2c-core` requires no device or external runtime.
 
-## Offline warp (PR8)
+## Offline depth-to-color warp
 
 `examples/offline.rs` is a complete dependency-free adapter entry point; run it
 with `cargo run -p d2c-core --example offline --offline`. It uses artificial

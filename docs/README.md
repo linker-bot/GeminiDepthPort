@@ -9,7 +9,7 @@
 
 - [部署与开机管理](guides/deployment.md)
 - [Web 配置、预览与确认](guides/web.md)
-- [配置字段与旧版迁移](guides/configuration.md)
+- [相机配置](guides/configuration.md)与[旧版迁移](guides/migration-v1.md)
 - [生命周期与录制保护](guides/lifecycle.md)
 - [可选 Rust 采集后端](guides/rust-backend.md)
 - [消费方接入与通信设置](guides/consumer-integration.md)
@@ -39,7 +39,7 @@
 [硬件结果与已知限制](validation/README.md)、[消费与 ROSbag2 验收](validation/consumer-acceptance.md)、
 [基础语义验收](validation/semantics.md)、[性能对照协议](validation/benchmarking.md)。
 
-开发者参考：[管理服务](development/management.md)、[SDK 与 ROS](development/sdk-and-ros.md)、
+开发者参考：[常驻采集服务](development/capture-service.md)、[管理服务](development/management.md)、[SDK 与 ROS](development/sdk-and-ros.md)、
 [官方 YUYV 适配](development/native-yuyv.md)、[SDK 扩展评估](development/sdk-extensions.md)、[Linux 合成管理测试](development/linux-management-fixture.md)、
 [worker 进程组清理](contracts/worker-process-group-cleanup.md)。
 

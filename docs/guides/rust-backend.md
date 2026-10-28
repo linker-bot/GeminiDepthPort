@@ -35,7 +35,7 @@ Rust 数据链是显式可选后端。未填写 `capture_backend` 或填写 `off
 
 `gemini_305` 为 Rust 专用型号档案，精确识别 Gemini 305，不把相近型号混绑。选择官方后端时明确拒绝该档案。原有 Gemini 335L/Gemini 2 档案保持兼容；某型号能通过配置校验不等于完成该设备、固件及档位的真机验收。
 
-`shutdown_timeout_ms` 在管理流程中最多 5000 ms，以容纳现有预览容器的有界停止流程。其他 supervisor 限制与常驻服务一致，超限或相互矛盾的 deadline 会被拒绝。
+`shutdown_timeout_ms` 在管理流程中最多 5000 ms，以容纳现有预览容器的有界停止流程。其他 supervisor 限制见[常驻服务参考](../development/capture-service.md)，超限或相互矛盾的 deadline 会被拒绝。
 
 ## 构建与不可变生成版本
 
@@ -47,7 +47,7 @@ Rust 数据链是显式可选后端。未填写 `capture_backend` 或填写 `off
 
 Web 预览使用同一常驻服务，JPEG bridge 仅订阅其实际 ROS 输出。确认档位时保留原有真实出帧探测，并额外绑定 image ID 和 runtime 摘要。即使镜像 tag 不变，只要重建后运行产物变化，旧确认也不能用于正式启动，必须重新预览确认。
 
-## 现有管理能力
+## 管理能力
 
 逐台启动、整组复检、停止、录制保护、CLI/Web 共用操作锁和 systemd 流程保持原有入口。Rust 镜像保留 `/app/health.py` 入口，但先后两次检查私有服务 status 的 generation、配置摘要、session、工作/父进程存活、heartbeat 与最近配对时间；两次检查之间执行 `/app/ros_health.py` 实际订阅 Image，检查布局/尺寸、帧率、时间戳推进、源 Unix 时间的新鲜度（含最多 100 ms 未来容差）及 QoS。session/PID 切换或 heartbeat 冻结会失败；`status.json` 中的在线标志不能代替消费侧健康证明。官方镜像保持原有默认时间策略。
 
@@ -61,7 +61,8 @@ CLI `scan` 可用于设备发现；Rust 镜像不包含官方 `list_devices_node
 
 Rust 后端生成的正式服务和预览容器使用 `ROS_LOCALHOST_ONLY=0`，同时必须加载本镜像的 `/app/fastdds.xml`：关闭 builtin transport，显式 UDPv4 且 interface whitelist 仅允许 `127.0.0.1`。因此保持本机 loopback UDP 契约，不把 DDS 开放到外部网卡。消费者也必须使用相同 XML、RMW、domain 和 `ROS_LOCALHOST_ONLY=0`。
 
-该组合用于避免 Humble RMW 在 `ROS_LOCALHOST_ONLY=1` 时隐式添加 SHM 导致 private IPC 容器间“图可见但消息不可达”的问题。不能只改环境变量而遗漏 loopback whitelist。官方默认管理生成行为保留兼容；同口径对照测试需显式配置两侧实际 transport。XML 纳入 runtime 摘要，修改后必须重新构建运行清单及完成档位确认。
+该组合用于避免 Humble RMW 在 `ROS_LOCALHOST_ONLY=1` 时隐式添加 SHM 导致 private IPC 容器间“图可见但消息不可达”的问题。不能只改环境变量而遗漏 loopback whitelist。官方默认管理生成行为保留兼容；同口径对照测试需显式配置两侧实际 transport。XML 纳入 runtime 摘要，修改后必须重新构建运行清单及完成档位确认。上游行为见
+[Humble RMW participant 初始化实现](https://github.com/ros2/rmw_fastrtps/blob/humble/rmw_fastrtps_shared_cpp/src/participant.cpp#L151-L160)。
 
 ## 验证与诊断
 

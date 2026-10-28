@@ -1,11 +1,11 @@
-# 配置与迁移
+# 相机配置
 
 默认配置为 schema v2，提供三个未绑定、禁用的 RGB-D 槽位。支持一至三台启用设备；
 旧版双机 schema v1 仅为兼容入口。部署见[部署指南](deployment.md)，运行状态见[生命周期](lifecycle.md)。
 
 ## 配置字段
 
-`src/config.rs` 负责 schema 校验、确认摘要、配置变更失效和纯迁移预览；`driver_profiles.json` 是依据公开上游 launch 参数建立的型号目录。型号选择与逻辑位置分离，同一型号可以绑定多个逻辑相机，但不能自行指定 launch 可执行文件。
+`driver_profiles.json` 是依据公开上游 launch 参数建立的型号目录。型号选择与逻辑位置分离，同一型号可以绑定多个逻辑相机，但不能自行指定 launch 可执行文件。
 
 每台相机分别声明：
 
@@ -43,33 +43,8 @@ geminidepthport validate --file inventory.v2.example.json --draft
 
 ## 兼容迁移
 
-迁移工具只读取受控环境当前的旧版 inventory，不从其他项目导入信息。
-
-```sh
-geminidepthport migrate
-```
-
-默认只返回摘要和 `plan_digest`，不写 inventory、不导出原始参数。迁移规则：
-
-1. 保留旧逻辑标识及已知的旧版生成命名规则，显式写入原命名空间与 frame 前缀。
-2. 保留已绑定设备，不猜测位置，不自动添加第三台设备。
-3. 示例占位符转为未绑定、禁用状态。
-4. 将彩色目标格式明确设为 YUYV，并清除全部旧确认。此操作是配置转换，不证明驱动已原生发布 YUYV。
-5. 标定适用性保持待重新确认，不将历史确认作为新接口验收结果。
-
-如需改变逻辑标识或保留自定义旧绑定，通过 `--bindings` 指定受控映射文件。映射以旧逻辑标识为键，每条必须完整提供 `name`、`namespace`、`frame_prefix`；不接受部分映射字段，也不推断左右位置。映射文件不得提交到仓库或附入公开报告。
-
-将预览返回的 `plan_digest` 保存为 `PLAN_DIGEST`，核对后再应用：
-
-```sh
-geminidepthport migrate --apply --expected-plan "$PLAN_DIGEST"
-```
-
-使用映射时，预览与应用必须传入相同的 `--bindings` 文件。源文件字节或映射发生变化后，旧摘要将被拒绝。
-
-应用前要求正式设备及调试预览已停止。工具先在被 Git 忽略的 `state/migrations/` 保存原文件精确备份，再原子替换 inventory；备份和新 inventory 的权限为仅文件所有者可读写。备份失败不修改原文件，替换失败保留原文件及备份。操作通过现有 CLI 操作锁串行化。
-
-迁移应用会将 inventory 切换为需要重新确认并核验镜像接口能力的 schema v2。需要继续使用旧运行方式时，应在受控环境恢复迁移前备份；恢复后原有生成文件若与 inventory 不匹配，应按旧版流程重新生成。不得通过改 schema 数字伪造回退。
+已有双机 schema v1 配置按[旧版迁移指南](migration-v1.md)执行预览、备份与应用。
+新部署无需执行迁移。
 
 ## 运行资料
 
