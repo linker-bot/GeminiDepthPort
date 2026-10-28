@@ -1,0 +1,545 @@
+{
+  "version": 2,
+  "source_base_commit": "ac1f7f3",
+  "fixed_run": {
+    "version": 1,
+    "parent_commit": "ac1f7f3",
+    "runtime": "e5d89dec9811bd962c8e39180fb40f8b6d70a51ea88aafa61cc02ba0416fdfb7",
+    "usbfs_memory_mb": 256,
+    "tf_subscriber_depth": 100,
+    "scene_adjusted": true,
+    "seconds": 300
+  },
+  "usbfs": {
+    "previous_mb": 16,
+    "current_mb": 256,
+    "persistent": false,
+    "reason": "UVC_ERROR_NO_MEM"
+  },
+  "measurement_seconds": 300.0031805750914,
+  "start_local": "2026-10-29T00:22:53.820002+08:00",
+  "end_local": "2026-10-29T00:27:53.823181+08:00",
+  "strict_ros_all_passed": true,
+  "all_observed_depth_frames_nonzero": true,
+  "zero_rejection_run": false,
+  "all_d2c_samples_completed": false,
+  "producer_observation_exceptions": [
+    {
+      "at": 266.212571867276,
+      "camera": 3,
+      "reason": "NOT_READY",
+      "state": "degraded"
+    }
+  ],
+  "cameras": [
+    {
+      "camera": 0,
+      "model": "Orbbec Gemini 305",
+      "color": {
+        "width": 640,
+        "height": 480,
+        "fps": 30
+      },
+      "depth": {
+        "width": 640,
+        "height": 480,
+        "fps": 30
+      },
+      "producer": {
+        "camera": 0,
+        "delta": {
+          "pairs_published": 8999,
+          "pairs_rejected": 0,
+          "publish_failures": 0,
+          "stamp_failures": 0,
+          "restart_attempt": 0,
+          "framesets_observed": 8999,
+          "missing_pairs": 0,
+          "skew_rejections": 0,
+          "monotonic_rejections": 0
+        },
+        "observed_pair_fps": 29.99634864786886,
+        "quality_state": "normal"
+      },
+      "consumer": {
+        "ok": true,
+        "matched_pairs": 9006,
+        "contract_errors": {},
+        "tf_received": true,
+        "late_tf_subscription_requested": true,
+        "unmatched_or_evicted_components": 1
+      },
+      "streams": {
+        "color": {
+          "images": 9007,
+          "matched_frames": 9007,
+          "active_fps": 30.02208538729017,
+          "image_gap_events": 0,
+          "contract_errors": {}
+        },
+        "depth": {
+          "images": 9006,
+          "matched_frames": 9006,
+          "active_fps": 30.022092073909956,
+          "image_gap_events": 0,
+          "contract_errors": {}
+        }
+      },
+      "offline": [
+        {
+          "job": "validate",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 0,
+            "d2c": false,
+            "normalized_frames": 0
+          }
+        },
+        {
+          "job": "original",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 1,
+            "d2c": false,
+            "normalized_frames": 0
+          }
+        },
+        {
+          "job": "d2c",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 1,
+            "d2c": true,
+            "normalized_frames": 0
+          }
+        }
+      ]
+    },
+    {
+      "camera": 1,
+      "model": "Orbbec Gemini 335L",
+      "color": {
+        "width": 640,
+        "height": 480,
+        "fps": 30
+      },
+      "depth": {
+        "width": 640,
+        "height": 480,
+        "fps": 30
+      },
+      "producer": {
+        "camera": 1,
+        "delta": {
+          "pairs_published": 9001,
+          "pairs_rejected": 0,
+          "publish_failures": 0,
+          "stamp_failures": 0,
+          "restart_attempt": 0,
+          "framesets_observed": 9001,
+          "missing_pairs": 0,
+          "skew_rejections": 0,
+          "monotonic_rejections": 0
+        },
+        "observed_pair_fps": 30.00301524385683,
+        "quality_state": "normal"
+      },
+      "consumer": {
+        "ok": true,
+        "matched_pairs": 8989,
+        "contract_errors": {},
+        "tf_received": true,
+        "late_tf_subscription_requested": true,
+        "unmatched_or_evicted_components": 3
+      },
+      "streams": {
+        "color": {
+          "images": 8989,
+          "matched_frames": 8989,
+          "active_fps": 29.96443726521435,
+          "image_gap_events": 0,
+          "contract_errors": {}
+        },
+        "depth": {
+          "images": 8990,
+          "matched_frames": 8990,
+          "active_fps": 29.96457525670573,
+          "image_gap_events": 0,
+          "contract_errors": {}
+        }
+      },
+      "offline": [
+        {
+          "job": "validate",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 0,
+            "d2c": false,
+            "normalized_frames": 0
+          }
+        },
+        {
+          "job": "original",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 1,
+            "d2c": false,
+            "normalized_frames": 0
+          }
+        },
+        {
+          "job": "d2c",
+          "exit_code": 1,
+          "result": {
+            "version": 1,
+            "complete": false,
+            "code": "WARP_FAILED"
+          }
+        }
+      ]
+    },
+    {
+      "camera": 2,
+      "model": "Orbbec Gemini 2",
+      "color": {
+        "width": 640,
+        "height": 480,
+        "fps": 30
+      },
+      "depth": {
+        "width": 640,
+        "height": 400,
+        "fps": 30
+      },
+      "producer": {
+        "camera": 2,
+        "delta": {
+          "pairs_published": 9001,
+          "pairs_rejected": 5,
+          "publish_failures": 0,
+          "stamp_failures": 0,
+          "restart_attempt": 0,
+          "framesets_observed": 9006,
+          "missing_pairs": 5,
+          "skew_rejections": 0,
+          "monotonic_rejections": 0
+        },
+        "observed_pair_fps": 30.00301524385683,
+        "quality_state": "normal"
+      },
+      "consumer": {
+        "ok": true,
+        "matched_pairs": 9001,
+        "contract_errors": {},
+        "tf_received": true,
+        "late_tf_subscription_requested": true,
+        "unmatched_or_evicted_components": 2
+      },
+      "streams": {
+        "color": {
+          "images": 9001,
+          "matched_frames": 9001,
+          "active_fps": 30.005191409102185,
+          "image_gap_events": 0,
+          "contract_errors": {}
+        },
+        "depth": {
+          "images": 9002,
+          "matched_frames": 9002,
+          "active_fps": 30.006057807666984,
+          "image_gap_events": 0,
+          "contract_errors": {}
+        }
+      },
+      "offline": [
+        {
+          "job": "validate",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 0,
+            "d2c": false,
+            "normalized_frames": 0
+          }
+        },
+        {
+          "job": "original",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 1,
+            "d2c": false,
+            "normalized_frames": 0
+          }
+        },
+        {
+          "job": "d2c",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 1,
+            "d2c": true,
+            "normalized_frames": 0
+          }
+        }
+      ]
+    },
+    {
+      "camera": 3,
+      "model": "Orbbec Gemini 2",
+      "color": {
+        "width": 640,
+        "height": 480,
+        "fps": 30
+      },
+      "depth": {
+        "width": 640,
+        "height": 400,
+        "fps": 30
+      },
+      "producer": {
+        "camera": 3,
+        "delta": {
+          "pairs_published": 8991,
+          "pairs_rejected": 5,
+          "publish_failures": 0,
+          "stamp_failures": 0,
+          "restart_attempt": 0,
+          "framesets_observed": 8996,
+          "missing_pairs": 5,
+          "skew_rejections": 0,
+          "monotonic_rejections": 0
+        },
+        "observed_pair_fps": 29.969682263916983,
+        "quality_state": "normal"
+      },
+      "consumer": {
+        "ok": true,
+        "matched_pairs": 9001,
+        "contract_errors": {},
+        "tf_received": true,
+        "late_tf_subscription_requested": true,
+        "unmatched_or_evicted_components": 3
+      },
+      "streams": {
+        "color": {
+          "images": 9001,
+          "matched_frames": 9001,
+          "active_fps": 30.004758653406363,
+          "image_gap_events": 0,
+          "contract_errors": {}
+        },
+        "depth": {
+          "images": 9002,
+          "matched_frames": 9002,
+          "active_fps": 30.005963409436784,
+          "image_gap_events": 0,
+          "contract_errors": {}
+        }
+      },
+      "offline": [
+        {
+          "job": "validate",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 0,
+            "d2c": false,
+            "normalized_frames": 0
+          }
+        },
+        {
+          "job": "original",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 1,
+            "d2c": false,
+            "normalized_frames": 0
+          }
+        },
+        {
+          "job": "d2c",
+          "exit_code": 0,
+          "result": {
+            "version": 1,
+            "complete": true,
+            "validated_pairs": 1,
+            "written_frames": 1,
+            "d2c": true,
+            "normalized_frames": 0
+          }
+        }
+      ]
+    }
+  ],
+  "bound_evidence": {
+    "version": 1,
+    "seconds": 310.01408142689615,
+    "cameras": [
+      {
+        "camera": 0,
+        "evidence_messages": 9302,
+        "errors": {},
+        "offline_sample": true,
+        "depth_frames": 9302,
+        "nonzero_depth_frames": 9302,
+        "min_valid_fraction": 0.9017708333333333,
+        "max_valid_fraction": 0.957099609375
+      },
+      {
+        "camera": 1,
+        "evidence_messages": 9284,
+        "errors": {},
+        "offline_sample": true,
+        "depth_frames": 9284,
+        "nonzero_depth_frames": 9284,
+        "min_valid_fraction": 0.6313151041666667,
+        "max_valid_fraction": 0.7144661458333333
+      },
+      {
+        "camera": 2,
+        "evidence_messages": 9297,
+        "errors": {},
+        "offline_sample": true,
+        "depth_frames": 9297,
+        "nonzero_depth_frames": 9297,
+        "min_valid_fraction": 0.716046875,
+        "max_valid_fraction": 0.74778125
+      },
+      {
+        "camera": 3,
+        "evidence_messages": 9297,
+        "errors": {},
+        "offline_sample": true,
+        "depth_frames": 9298,
+        "nonzero_depth_frames": 9298,
+        "min_valid_fraction": 0.82859375,
+        "max_valid_fraction": 0.844453125
+      }
+    ]
+  },
+  "pixel_roundtrip": {
+    "version": 1,
+    "ok": true,
+    "cameras": [
+      {
+        "camera": 0,
+        "original_pixel_equal": true,
+        "jobs": [
+          {
+            "job": "original",
+            "archive_png_byte_equal": true,
+            "sidecars_exact": true,
+            "width": 640,
+            "height": 480,
+            "valid_pixels": 287288
+          },
+          {
+            "job": "d2c",
+            "archive_png_byte_equal": true,
+            "sidecars_exact": true,
+            "width": 640,
+            "height": 480,
+            "valid_pixels": 277136
+          }
+        ]
+      },
+      {
+        "camera": 1,
+        "original_pixel_equal": true,
+        "jobs": [
+          {
+            "job": "original",
+            "archive_png_byte_equal": true,
+            "sidecars_exact": true,
+            "width": 640,
+            "height": 480,
+            "valid_pixels": 200012
+          },
+          {
+            "job": "d2c",
+            "complete": false,
+            "error": "WARP_FAILED",
+            "no_false_complete": true
+          }
+        ]
+      },
+      {
+        "camera": 2,
+        "original_pixel_equal": true,
+        "jobs": [
+          {
+            "job": "original",
+            "archive_png_byte_equal": true,
+            "sidecars_exact": true,
+            "width": 640,
+            "height": 400,
+            "valid_pixels": 186324
+          },
+          {
+            "job": "d2c",
+            "archive_png_byte_equal": true,
+            "sidecars_exact": true,
+            "width": 640,
+            "height": 480,
+            "valid_pixels": 85395
+          }
+        ]
+      },
+      {
+        "camera": 3,
+        "original_pixel_equal": true,
+        "jobs": [
+          {
+            "job": "original",
+            "archive_png_byte_equal": true,
+            "sidecars_exact": true,
+            "width": 640,
+            "height": 400,
+            "valid_pixels": 214456
+          },
+          {
+            "job": "d2c",
+            "archive_png_byte_equal": true,
+            "sidecars_exact": true,
+            "width": 640,
+            "height": 480,
+            "valid_pixels": 95381
+          }
+        ]
+      }
+    ]
+  },
+  "d2c_rejected_sample": {
+    "code": "WARP_FAILED",
+    "complete": false,
+    "detail_code": "D2C_OUTPUT_OVERFLOW",
+    "version": 1
+  }
+}

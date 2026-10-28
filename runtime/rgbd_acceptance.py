@@ -492,9 +492,9 @@ def run_live(spec, seconds, discovery_seconds, tf_delay_seconds, wire_only=False
     from std_msgs.msg import String
     from tf2_msgs.msg import TFMessage
     try:
-        from .qos_contract import validate_offered_qos
+        from .qos_contract import validate_offered_qos, STATIC_TF_SUBSCRIPTION_DEPTH
     except ImportError:
-        from qos_contract import validate_offered_qos
+        from qos_contract import validate_offered_qos, STATIC_TF_SUBSCRIPTION_DEPTH
     observer = Observer(spec, wire_only)
     rclpy.init()
     static_resolver = None
@@ -504,7 +504,9 @@ def run_live(spec, seconds, discovery_seconds, tf_delay_seconds, wire_only=False
         static_resolver = StaticTfResolver(Buffer(), spec['tf'], Time())
     node = rclpy.create_node('geminidepthport_consumer_observer')
     qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE)
-    tf_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    # /tf_static has multiple independent writers in a camera group. A
+    # depth-1 reader can evict other writers' late-join samples before spin.
+    tf_qos = QoSProfile(depth=STATIC_TF_SUBSCRIPTION_DEPTH, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     subscriptions, topic_bindings = [], []
     active = [False]
     collecting_images = [True]

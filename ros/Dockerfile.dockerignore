@@ -3,3 +3,5 @@
 !ros/**
 !runtime/
 !runtime/fastdds.xml
+
+!runtime/qos_contract.py

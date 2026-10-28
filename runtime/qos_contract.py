@@ -5,6 +5,10 @@ onto rmw_qos_profile_default (RELIABLE, VOLATILE). RELIABLE is not itself a vali
 Orbbec profile name; do not rely on its error-and-fallback behavior.
 """
 
+# Match the bounded static-transform listener history: multiple independent
+# /tf_static writers must fit while the executor is busy with image callbacks.
+STATIC_TF_SUBSCRIPTION_DEPTH = 100
+
 QOS_KEYS = tuple(stream + suffix for stream in ('color', 'depth')
                  for suffix in ('_qos', '_camera_info_qos'))
 

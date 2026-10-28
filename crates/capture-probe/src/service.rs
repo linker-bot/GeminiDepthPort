@@ -1000,6 +1000,27 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
         stopped?;
         Ok(())
     })();
+    if let Err(error) = &outcome {
+        // SDK details may contain device identities. This bounded record stays
+        // in the owner-only status directory; public stderr remains redacted.
+        let detail = format!("{error:#}");
+        let truncated = detail.chars().count() > 4096;
+        let detail: String = detail.chars().take(4096).collect();
+        let path = config
+            .settings
+            .status_path
+            .parent()
+            .context("status directory")?
+            .join(format!("failure-{}.json", status.session));
+        // Diagnostics must not mask the original acquisition failure if storage
+        // is unavailable. The usual status/finalization path still runs below.
+        let _ = atomic_status(
+            &path,
+            &json!({"version":1,
+            "kind":"capture-service-private-failure","session_id":status.session,
+            "error_chain":detail,"details_truncated":truncated}),
+        );
+    }
     if let Some(quality) = &mut status.quality {
         if outcome.is_err() && quality.engine.snapshot().state == quality_core::QualityState::Normal
         {

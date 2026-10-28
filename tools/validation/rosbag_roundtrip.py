@@ -17,6 +17,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+from runtime.qos_contract import STATIC_TF_SUBSCRIPTION_DEPTH
 from runtime.rgbd_acceptance import (ContractError, Observer, canonical, image_projection, info_projection,
                                      require, tf_projection, validate_spec)
 
@@ -109,7 +110,7 @@ def record(spec, path, seconds, discovery, maximum, wire_only):
                 except Exception as exc:
                     errors[safe_code(exc)] += 1
                     active[0] = False
-            qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
+            qos = QoSProfile(depth=STATIC_TF_SUBSCRIPTION_DEPTH if kind == 'tf' else 10, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL if kind == 'tf' else DurabilityPolicy.VOLATILE)
             subscriptions.append(node.create_subscription(get_message(type_name), topic, callback, qos))
         deadline = time.monotonic() + discovery
@@ -135,7 +136,7 @@ def record(spec, path, seconds, discovery, maximum, wire_only):
                 errors[safe_code(exc)] += 1
                 active[0] = False
         subscriptions.append(node.create_subscription(TFMessage, '/tf_static', static_callback,
-            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)))
+            QoSProfile(depth=STATIC_TF_SUBSCRIPTION_DEPTH, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)))
         deadline = time.monotonic() + seconds
         while active[0] and time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=.02)

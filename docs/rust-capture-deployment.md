@@ -105,3 +105,28 @@ python3 tools/validation/management_acceptance.py \
 策略文件是 `rust_capture` 对象本身；若源 inventory 已包含完整策略，可省略该文件。脚本依次调用真实 Web preview/start、读取实际帧、confirm、preview/stop，再通过公开 CLI 完成正式 generation/up、实际健康、标定导出、录制保护阻止 CLI 停机和 Web 预览、错误凭证拒绝、健康维持、正确释放及 down。它不会直接写入 `profiles_verified:true`，也不会为启动而伪造确认摘要。
 
 凭证只保留在内存并经 stdin 释放，不写日志。所有库存、运行输出和标定快照留在 0700/0600 私有工作区，终端仅给出脱敏阶段结果；失败时不宣称正式管理通过。清理只使用本次取得的公开控制流程，不删除保护记录或接管已有 Compose 项目。该脚本也不替代独立消费者长稳、物理精度或业务录制兼容验收。
+
+## 多机 USBFS 缓冲与失败诊断
+
+当 SDK 报 `UVC_ERROR_NO_MEM` 并提示增加 usbfs buffer 时，在宿主机读取
+`/sys/module/usbcore/parameters/usbfs_memory_mb`。四机实测中，16 MiB 上限导致
+第四路启动退出；管理员显式调到 256 MiB 后，四路均可启动。该值是本次
+640×480 彩色、640×480/640×400 深度、30 FPS 组合的实测设置，不是所有档位
+的固定容量公式。
+
+```sh
+cat /sys/module/usbcore/parameters/usbfs_memory_mb
+sudo sh -c 'printf 256 > /sys/module/usbcore/parameters/usbfs_memory_mb'
+```
+
+此命令即时修改当前内核参数，不写永久配置。项目不会从采集容器自动修改
+宿主机参数。正式部署仍按逐台启动、实际就绪后启动下一台，再进入并行采集。
+
+工作进程失败时，采集服务会尽力在既有私有状态目录写入
+`failure-<session>.json`：0600 文件，包含会话、最多 4096 字符的错误链与截断
+标志。SDK 错误可能包含设备身份，文件仅供私有诊断；公开 stderr 与状态继续
+使用脱敏错误码。诊断写入失败不会替代原来的采集错误，也不会解除录制保护。
+
+多相机 `/tf_static` 有多个独立发布者。消费验收与 ROSbag 工具统一使用有界
+100 条订阅历史，避免迟订阅期间其他发布者的样本被深度为 1 的读队列淘汰。
+发布器的可靠性、持久性和历史设置保持原约定。

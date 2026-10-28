@@ -145,3 +145,8 @@ sequence progression, clock-source changes, big-endian padded rows, and a
 later-frame failure after one frame was written.
 It also deletes the input before resolving exported snapshot/evidence hashes.
 All fixtures are artificial; no SDK comparison or performance test is claimed.
+
+D2C range failures retain `code: "WARP_FAILED"` and add
+`detail_code: "D2C_OUTPUT_OVERFLOW"`. A winning projected color-Z outside u16
+millimetres rejects the whole frame. The input, including 65535 boundary values,
+is not silently changed, clamped or filtered; no COMPLETE output is published.

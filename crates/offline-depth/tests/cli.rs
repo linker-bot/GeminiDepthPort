@@ -505,3 +505,35 @@ fn each_stream_sequence_advances_independently_and_selected_clock_cannot_change(
     update(&e, &mut m);
     assert!(!cli(input.path(), &["--validate-only"]).status.success());
 }
+
+#[test]
+fn d2c_overflow_is_explicit_and_never_clamped_or_completed() {
+    let input = tempfile::tempdir().unwrap();
+    let mut manifest = fixture(input.path(), false, 0.001);
+    let bytes = [65535u16, 0]
+        .into_iter()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    fs::write(input.path().join("depth.raw16"), &bytes).unwrap();
+    manifest.pairs[0].depth_sha256 = sha256(&bytes);
+    write_manifest(input.path(), &manifest);
+    let output = tempfile::tempdir().unwrap();
+    let result = cli(
+        input.path(),
+        &[
+            "--d2c",
+            "--output",
+            output.path().to_str().unwrap(),
+            "--job",
+            "overflow",
+        ],
+    );
+    assert!(!result.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(error["code"], "WARP_FAILED");
+    assert_eq!(error["detail_code"], "D2C_OUTPUT_OVERFLOW");
+    assert_eq!(error["complete"], false);
+    assert!(!output.path().join("overflow/COMPLETE").exists());
+    assert!(!output.path().join("overflow.partial/COMPLETE").exists());
+    assert_eq!(fs::read(input.path().join("depth.raw16")).unwrap(), bytes);
+}

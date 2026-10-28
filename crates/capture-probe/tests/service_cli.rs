@@ -109,6 +109,21 @@ fn failed_worker_has_finite_restart_budget_and_private_status() {
             .len(),
         32
     );
+    let failure_path = dir.join(format!(
+        "failure-{}.json",
+        status["session_id"].as_str().unwrap()
+    ));
+    let detail: Value = serde_json::from_slice(&fs::read(&failure_path).unwrap()).unwrap();
+    assert_eq!(detail["kind"], "capture-service-private-failure");
+    assert_eq!(detail["session_id"], status["session_id"]);
+    assert!(!detail["error_chain"].as_str().unwrap().is_empty());
+    assert!(detail["error_chain"].as_str().unwrap().chars().count() <= 4096);
+    assert!(!raw.contains(detail["error_chain"].as_str().unwrap()));
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        fs::metadata(failure_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 #[test]

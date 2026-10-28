@@ -29,6 +29,13 @@ impl std::fmt::Display for OfflineError {
 }
 impl std::error::Error for OfflineError {}
 impl OfflineError {
+    /// Additive public diagnostic; the existing category code remains stable.
+    pub fn detail_code(&self) -> &'static str {
+        match self {
+            Self::Warp(d2c_core::WarpError::OutputOverflow) => "D2C_OUTPUT_OVERFLOW",
+            _ => self.code(),
+        }
+    }
     pub fn code(&self) -> &'static str {
         match self {
             Self::Invalid(c) => c,

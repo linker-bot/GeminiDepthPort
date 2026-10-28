@@ -11,8 +11,9 @@ fn main() {
         }
         Err(e) => {
             println!(
-                "{{\"version\":1,\"complete\":false,\"code\":\"{}\"}}",
-                e.code()
+                "{}",
+                serde_json::json!({"version":1,"complete":false,
+                "code":e.code(),"detail_code":e.detail_code()})
             );
             std::process::exit(1)
         }
