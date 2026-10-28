@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "upstream_repository": "https://github.com/orbbec/OrbbecSDK_ROS2",
+  "upstream_commit": "c153462518ad674650bafa4464fda72c27ab797a",
+  "patch_file": "0001-publish-owned-native-yuyv.patch",
+  "patch_sha256": "91e120410d29e1a6e886bfc37c7efd4b091613fe28871766b134b7b14c21287e",
+  "original_files": {
+    "orbbec_camera/src/ob_camera_node.cpp": "ce4034fbeed0f3b62b104c579b0b60e3feeca4f2619ae025c6fcb76a0e9533ec"
+  },
+  "patched_files": {
+    "orbbec_camera/src/ob_camera_node.cpp": "5ba3729385956822050269c3c95eadd8d2f79d3c40543e735cc5396dd4704d83",
+    "orbbec_camera/include/orbbec_camera/native_yuyv.hpp": "297ee11977b1698b2729ff4851bd429294c87aa78ec684e7bb724b530b24cc57"
+  }
+}

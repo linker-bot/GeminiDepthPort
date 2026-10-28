@@ -1,0 +1,78 @@
+services:
+  web:
+    image: local/orbbec-console:compose-v1
+    build:
+      context: .
+      dockerfile: web.Dockerfile
+    working_dir: ${ORBBEC_DEPLOY_DIR:?Run ./deploy.sh web or set ORBBEC_DEPLOY_DIR}
+    user: ${DEPLOY_UID:-0}:${DEPLOY_GID:-0}
+    group_add:
+    - ${DOCKER_GID:-0}
+    command:
+    - python3
+    - web_server.py
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8765'
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    labels:
+      orbbec.role: management
+    ports:
+    - 127.0.0.1:${WEB_PORT:-8765}:8765
+    environment:
+      ORBBEC_CONTAINERIZED: '1'
+      ORBBEC_DEPLOY_DIR: ${ORBBEC_DEPLOY_DIR:?Run ./deploy.sh web or set ORBBEC_DEPLOY_DIR}
+      ORBBEC_PUBLIC_PORT: ${WEB_PORT:-8765}
+      PYTHONUNBUFFERED: '1'
+      HOME: /tmp/console-home
+      DOCKER_CONFIG: /tmp/docker
+      XDG_CACHE_HOME: /tmp/cache
+    volumes:
+    - type: bind
+      source: ${ORBBEC_DEPLOY_DIR:?Run ./deploy.sh web or set ORBBEC_DEPLOY_DIR}
+      target: ${ORBBEC_DEPLOY_DIR:?Run ./deploy.sh web or set ORBBEC_DEPLOY_DIR}
+    - type: bind
+      source: /var/run/docker.sock
+      target: /var/run/docker.sock
+    - type: bind
+      source: /sys
+      target: /sys
+      read_only: true
+    - type: bind
+      source: /dev/bus/usb
+      target: /dev/bus/usb
+      read_only: true
+    - type: bind
+      source: /run/udev
+      target: /run/udev
+      read_only: true
+    - type: bind
+      source: /etc/udev/rules.d
+      target: /etc/udev/rules.d
+      read_only: true
+    read_only: true
+    tmpfs:
+    - /tmp:size=128m
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - -c
+      - import urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:8765/healthz',
+        timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'

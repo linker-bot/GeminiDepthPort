@@ -1,0 +1,16 @@
+*
+!Dockerfile
+!runtime/
+!runtime/**
+
+!driver_profiles.json
+
+!patches/
+!patches/public-orbbec/
+!patches/public-orbbec/**
+!scripts/
+!scripts/apply_public_yuyv_patch.py
+!tests/
+!tests/cpp/
+!tests/cpp/**
+!tests/ros_native_yuyv_smoke.py

@@ -1,0 +1,87 @@
+{
+  "schema_version": 2,
+  "image": "local/orbbec-head-wrist:c153462518ad-web-v3",
+  "upstream_commit": "c153462518ad674650bafa4464fda72c27ab797a",
+  "ros_domain_id": 42,
+  "startup_timeout_seconds": 150,
+  "cameras": [
+    {
+      "name": "camera_a",
+      "profile": "gemini_335l",
+      "namespace": "/camera_a",
+      "frame_prefix": "camera_a",
+      "serial_number": "",
+      "enabled": false,
+      "profiles_verified": false,
+      "verification": null,
+      "parameters": {
+        "enable_color": true,
+        "enable_depth": true,
+        "color_format": "YUYV",
+        "depth_format": "Y16",
+        "depth_registration": false,
+        "color_qos": "DEFAULT",
+        "color_camera_info_qos": "DEFAULT",
+        "depth_qos": "DEFAULT",
+        "depth_camera_info_qos": "DEFAULT"
+      },
+      "health": {},
+      "timestamp_source": "",
+      "calibration_revision": "",
+      "depth_unit": "mm"
+    },
+    {
+      "name": "camera_b",
+      "profile": "gemini_2",
+      "namespace": "/camera_b",
+      "frame_prefix": "camera_b",
+      "serial_number": "",
+      "enabled": false,
+      "profiles_verified": false,
+      "verification": null,
+      "parameters": {
+        "enable_color": true,
+        "enable_depth": true,
+        "color_format": "YUYV",
+        "depth_format": "Y16",
+        "depth_registration": false,
+        "color_qos": "DEFAULT",
+        "color_camera_info_qos": "DEFAULT",
+        "depth_qos": "DEFAULT",
+        "depth_camera_info_qos": "DEFAULT"
+      },
+      "health": {},
+      "timestamp_source": "",
+      "calibration_revision": "",
+      "depth_unit": "mm"
+    },
+    {
+      "name": "camera_c",
+      "profile": "gemini_2",
+      "namespace": "/camera_c",
+      "frame_prefix": "camera_c",
+      "serial_number": "",
+      "enabled": false,
+      "profiles_verified": false,
+      "verification": null,
+      "parameters": {
+        "enable_color": true,
+        "enable_depth": true,
+        "color_format": "YUYV",
+        "depth_format": "Y16",
+        "depth_registration": false,
+        "color_qos": "DEFAULT",
+        "color_camera_info_qos": "DEFAULT",
+        "depth_qos": "DEFAULT",
+        "depth_camera_info_qos": "DEFAULT"
+      },
+      "health": {},
+      "timestamp_source": "",
+      "calibration_revision": "",
+      "depth_unit": "mm"
+    }
+  ],
+  "communication": {
+    "profile": "humble-fastdds-local-udp-v1"
+  }
+}

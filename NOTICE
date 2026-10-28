@@ -1,0 +1,22 @@
+GeminiDepthPort
+Copyright 2026 soulteary and contributors.
+
+This project provides community-maintained camera configuration, Web management,
+preview, and deployment tooling for Orbbec Gemini 335L and Gemini 2 cameras.
+It is not an official Orbbec product and is not endorsed by Orbbec.
+
+Compatibility parameters and launch argument contracts are based on:
+  OrbbecSDK_ROS2
+  https://github.com/orbbec/OrbbecSDK_ROS2
+  Commit: c153462518ad674650bafa4464fda72c27ab797a
+  License: Apache License, Version 2.0
+
+The upstream driver is fetched during the camera image build. Its original
+copyright, license and applicable notices remain with the upstream components.
+Orbbec SDK binaries, extensions and other third-party components are not
+relicensed by the GeminiDepthPort Apache-2.0 license.
+
+GeminiDepthPort applies a small, publicly documented modification to the pinned
+OrbbecSDK_ROS2 source for owned native YUYV ROS publication and preview saving.
+The patch, source hashes and modification description are retained under
+patches/public-orbbec/ and docs/native-yuyv.md. Original upstream notices remain.

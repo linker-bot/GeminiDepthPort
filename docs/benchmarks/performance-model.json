@@ -1,0 +1,113 @@
+{
+  "baseline_commit": "2526cc5705b9473d0579e3fff9f39d533cdbd86f",
+  "hardware_context": "Intel Core i9-13900K class or higher; actual memory/GPU/USB controller unknown",
+  "evidence_type": "Static code review and arithmetic only; not measured CPU, latency, memory or camera throughput",
+  "streams": [
+    {
+      "camera": "head",
+      "stream": "color",
+      "width": 1280,
+      "height": 720,
+      "fps": 15,
+      "bytes_per_pixel": 3,
+      "bytes_per_frame": 2764800,
+      "bytes_per_second": 41472000,
+      "preview_bytes_per_second_at_5_fps": 13824000
+    },
+    {
+      "camera": "head",
+      "stream": "depth",
+      "width": 640,
+      "height": 480,
+      "fps": 15,
+      "bytes_per_pixel": 2,
+      "bytes_per_frame": 614400,
+      "bytes_per_second": 9216000,
+      "preview_bytes_per_second_at_5_fps": 3072000
+    },
+    {
+      "camera": "wrist",
+      "stream": "color",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "bytes_per_pixel": 3,
+      "bytes_per_frame": 921600,
+      "bytes_per_second": 27648000,
+      "preview_bytes_per_second_at_5_fps": 4608000
+    },
+    {
+      "camera": "wrist",
+      "stream": "depth",
+      "width": 640,
+      "height": 400,
+      "fps": 30,
+      "bytes_per_pixel": 2,
+      "bytes_per_frame": 512000,
+      "bytes_per_second": 15360000,
+      "preview_bytes_per_second_at_5_fps": 2560000
+    }
+  ],
+  "total_raw_bytes_per_second": 93696000,
+  "total_raw_MiB_per_second": 89.35546875,
+  "total_raw_Mbps": 749.568,
+  "preview_raw_bytes_per_second_at_5_fps": 24064000,
+  "raw_payload_reduction_if_sampled_before_ros_for_preview_only": 0.7431693989071038,
+  "additional_memory_read_write_bytes_per_second_per_full_copy": 187392000,
+  "health_nominal_active_seconds": 12,
+  "health_interval_after_completion_seconds": 30,
+  "health_nominal_active_duty_cycle": 0.2857142857142857,
+  "health_full_raw_extra_delivery_model_bytes_per_second": 26770285.714285713,
+  "browser_poll_ms": 350,
+  "browser_poll_phase_mean_wait_ms_if_uniform": 175,
+  "amdahl_scenarios": [
+    {
+      "optimizable_share": 0.05,
+      "local_speedup": 3,
+      "cpu_work_reduction": 0.033333333333333326,
+      "capacity_speedup_if_cpu_bound": 1.0344827586206897,
+      "ideal_ceiling": 1.0526315789473684
+    },
+    {
+      "optimizable_share": 0.1,
+      "local_speedup": 3,
+      "cpu_work_reduction": 0.06666666666666665,
+      "capacity_speedup_if_cpu_bound": 1.0714285714285714,
+      "ideal_ceiling": 1.1111111111111112
+    },
+    {
+      "optimizable_share": 0.3,
+      "local_speedup": 3,
+      "cpu_work_reduction": 0.20000000000000007,
+      "capacity_speedup_if_cpu_bound": 1.25,
+      "ideal_ceiling": 1.4285714285714286
+    },
+    {
+      "optimizable_share": 0.5,
+      "local_speedup": 3,
+      "cpu_work_reduction": 0.33333333333333337,
+      "capacity_speedup_if_cpu_bound": 1.5,
+      "ideal_ceiling": 2.0
+    },
+    {
+      "optimizable_share": 0.6,
+      "local_speedup": 3,
+      "cpu_work_reduction": 0.4,
+      "capacity_speedup_if_cpu_bound": 1.6666666666666667,
+      "ideal_ceiling": 2.5
+    },
+    {
+      "optimizable_share": 0.8,
+      "local_speedup": 3,
+      "cpu_work_reduction": 0.5333333333333334,
+      "capacity_speedup_if_cpu_bound": 2.1428571428571432,
+      "ideal_ceiling": 5.000000000000001
+    }
+  ],
+  "original_assessment_commit": "5071b2991d37fae238e4ad34a820d7daad1f72e6",
+  "configuration_sha256": "3e490ec2218b44e314cf4736febc34a3f0bef06ed7ab10fa63b1911a5949aeba",
+  "health_full_raw_extra_delivery_model_conditions": "Illustrative nominal estimate only: immediate matching and full raw delivery throughout 12 seconds, interval 30 seconds after completion; not measured CPU or wire traffic.",
+  "scope": "Static documentation model; no benchmark runner, Rust implementation, or measured hardware results.",
+  "workload_profile": "WP0: public dual-camera MJPG input / RGB8 color output prototype",
+  "phase_two_profile": "WP1: three-camera native YUYV contract; pending implementation and controlled configuration; no hardware results or numeric payload forecast."
+}

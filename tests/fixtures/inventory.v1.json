@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "image": "local/orbbec-head-wrist:c153462518ad-web-v3",
+  "upstream_commit": "c153462518ad674650bafa4464fda72c27ab797a",
+  "ros_domain_id": 42,
+  "startup_timeout_seconds": 150,
+  "cameras": [
+    {
+      "name": "head",
+      "enabled": true,
+      "serial_number": "REPLACE_HEAD",
+      "launch_file": "gemini_330_series.launch.py",
+      "profiles_verified": false,
+      "parameters": {
+        "uvc_backend": "libuvc",
+        "enable_color": true,
+        "color_width": 1280,
+        "color_height": 720,
+        "color_fps": 15,
+        "color_format": "MJPG",
+        "enable_depth": true,
+        "depth_width": 640,
+        "depth_height": 480,
+        "depth_fps": 15,
+        "depth_format": "Y16",
+        "enable_left_ir": false,
+        "enable_right_ir": false,
+        "enable_accel": false,
+        "enable_gyro": false,
+        "enable_point_cloud": false,
+        "enable_colored_point_cloud": false,
+        "depth_registration": false,
+        "publish_tf": true,
+        "sync_mode": "standalone",
+        "enumerate_net_device": false,
+        "color_qos": "SENSOR_DATA",
+        "depth_qos": "SENSOR_DATA",
+        "color_frame_queue_max_frames": 1,
+        "time_domain": "global",
+        "timestamp_clock_type": "realtime"
+      },
+      "health": {
+        "discovery_seconds": 6,
+        "sample_seconds": 6,
+        "freshness_seconds": 2,
+        "min_fps_ratio": 0.8
+      },
+      "model": "Gemini 335L"
+    },
+    {
+      "name": "wrist",
+      "enabled": true,
+      "serial_number": "REPLACE_WRIST",
+      "launch_file": "gemini2.launch.py",
+      "profiles_verified": false,
+      "parameters": {
+        "uvc_backend": "libuvc",
+        "enable_color": true,
+        "color_width": 640,
+        "color_height": 480,
+        "color_fps": 30,
+        "color_format": "MJPG",
+        "enable_depth": true,
+        "depth_width": 640,
+        "depth_height": 400,
+        "depth_fps": 30,
+        "depth_format": "Y16",
+        "enable_accel": false,
+        "enable_gyro": false,
+        "enable_point_cloud": false,
+        "enable_colored_point_cloud": false,
+        "depth_registration": false,
+        "publish_tf": true,
+        "sync_mode": "standalone",
+        "color_qos": "SENSOR_DATA",
+        "depth_qos": "SENSOR_DATA",
+        "enable_ir": false,
+        "depth_work_mode": "Unbinned Dense Default",
+        "color_frame_queue_max_frames": 1,
+        "time_domain": "global",
+        "timestamp_clock_type": "realtime"
+      },
+      "health": {
+        "discovery_seconds": 6,
+        "sample_seconds": 6,
+        "freshness_seconds": 2,
+        "min_fps_ratio": 0.8
+      },
+      "model": "Gemini 2"
+    }
+  ]
+}

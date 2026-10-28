@@ -1,0 +1,214 @@
+diff --git a/orbbec_camera/src/ob_camera_node.cpp b/orbbec_camera/src/ob_camera_node.cpp
+--- a/orbbec_camera/src/ob_camera_node.cpp
++++ b/orbbec_camera/src/ob_camera_node.cpp
+@@ -13,10 +13,11 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  *******************************************************************************/
+ 
+ #include "orbbec_camera/ob_camera_node.h"
++#include "orbbec_camera/native_yuyv.hpp"
+ #include <rclcpp/expand_topic_or_service_name.hpp>
+ #include <rclcpp/rclcpp.hpp>
+ #include <thread>
+ #include <geometry_msgs/msg/transform_stamped.hpp>
+ #include <sstream>
+@@ -4260,12 +4261,16 @@
+              format == OB_FORMAT_RW16) {
+     image_format_[stream_index] = CV_16UC1;
+     encoding_[stream_index] = is_depth_stream ? sensor_msgs::image_encodings::TYPE_16UC1
+                                               : sensor_msgs::image_encodings::MONO16;
+     unit_step_size_[stream_index] = sizeof(uint16_t);
++  } else if (is_color_stream && format == OB_FORMAT_YUYV) {
++    image_format_[stream_index] = CV_8UC2;
++    encoding_[stream_index] = "yuyv";
++    unit_step_size_[stream_index] = 2 * sizeof(uint8_t);
+   } else if (is_color_stream &&
+-             (format == OB_FORMAT_YUYV || format == OB_FORMAT_UYVY || format == OB_FORMAT_I420 ||
++             (format == OB_FORMAT_UYVY || format == OB_FORMAT_I420 ||
+               format == OB_FORMAT_NV12 || format == OB_FORMAT_NV21)) {
+     image_format_[stream_index] = CV_8UC3;
+     encoding_[stream_index] = sensor_msgs::image_encodings::RGB8;
+     unit_step_size_[stream_index] = 3 * sizeof(uint8_t);
+   } else if (format == OB_FORMAT_MJPG || format == OB_FORMAT_MJPEG) {
+@@ -5820,12 +5825,16 @@
+ 
+   const auto image_qos_profile = getImageQosProfile(stream_index);
+   const bool is_mjpg_color_stream =
+       (stream_index == COLOR || stream_index == COLOR_LEFT || stream_index == COLOR_RIGHT) &&
+       format_[stream_index] == OB_FORMAT_MJPG;
+-  const bool uses_image_transport = !use_intra_process_ && !is_mjpg_color_stream;
+-  if (use_intra_process_ || is_mjpg_color_stream) {
++  const bool is_native_yuyv_stream =
++      (stream_index == COLOR || stream_index == COLOR_LEFT || stream_index == COLOR_RIGHT) &&
++      format_[stream_index] == OB_FORMAT_YUYV;
++  const bool uses_image_transport =
++      !use_intra_process_ && !is_mjpg_color_stream && !is_native_yuyv_stream;
++  if (use_intra_process_ || is_mjpg_color_stream || is_native_yuyv_stream) {
+     releaseGlobalImageTransportPublisher(*node_, topic);
+     image_publishers_[stream_index] =
+         std::make_shared<image_rcl_publisher>(*node_, topic, image_qos_profile);
+   } else {
+     image_publishers_[stream_index] =
+@@ -7139,20 +7148,32 @@
+     return false;
+   }
+   const auto format = frame->getFormat();
+   if (format == OB_FORMAT_RGB || format == OB_FORMAT_BGR || format == OB_FORMAT_RGB888 ||
+       format == OB_FORMAT_RGBA || format == OB_FORMAT_BGRA || format == OB_FORMAT_Y16 ||
+-      format == OB_FORMAT_Y8) {
++      format == OB_FORMAT_Y8 || format == OB_FORMAT_YUYV) {
+     return false;
+   }
+   return true;
+ }
+ 
+ bool OBCameraNode::decodeColorFrameToBuffer(const std::shared_ptr<ob::Frame> &frame,
+                                             uint8_t *buffer) {
+   if (frame == nullptr) {
+     return false;
++  }
++  stream_index_pair requested_stream = COLOR;
++  bool is_color = true;
++  switch (frame->getType()) {
++    case OB_FRAME_COLOR: requested_stream = COLOR; break;
++    case OB_FRAME_COLOR_LEFT: requested_stream = COLOR_LEFT; break;
++    case OB_FRAME_COLOR_RIGHT: requested_stream = COLOR_RIGHT; break;
++    default: is_color = false; break;
++  }
++  if (is_color && format_[requested_stream] == OB_FORMAT_YUYV &&
++      frame->getFormat() != OB_FORMAT_YUYV) {
++    return false;  // Reject before any decode can write the RGB scratch buffer.
+   }
+   if (!buffer) {
+     return false;
+   }
+ 
+@@ -7305,10 +7326,19 @@
+   const auto record_image_publish_skipped = [&]() {
+     if (log_image_timestamps) {
+       timestamp_csv_logger_->recordImagePublishSkipped(stream_index.first, frame);
+     }
+   };
++  const bool requested_native_yuyv =
++      (stream_index == COLOR || stream_index == COLOR_LEFT || stream_index == COLOR_RIGHT) &&
++      format_[stream_index] == OB_FORMAT_YUYV;
++  if (requested_native_yuyv && frame->getFormat() != OB_FORMAT_YUYV) {
++    RCLCPP_ERROR_SKIPFIRST_THROTTLE(logger_, *(node_->get_clock()), 1000,
++                                   "Native YUYV stream returned an unexpected frame format");
++    record_image_publish_skipped();
++    return;
++  }
+   CHECK_NOTNULL(image_publishers_[stream_index]);
+   const bool has_explicit_compressed_publisher =
+       compressed_image_publishers_.count(stream_index) > 0 &&
+       compressed_image_publishers_.at(stream_index);
+   bool has_raw_image_subscriber = image_publishers_[stream_index]->get_subscription_count() > 0;
+@@ -7412,10 +7442,53 @@
+     camera_info.header.stamp = timestamp;
+     camera_info.header.frame_id = frame_id;
+     camera_info.width = width;
+     camera_info.height = height;
+   }
++  // Publish native YUYV directly: cv_bridge in older ROS releases does not know
++  // the literal "yuyv" encoding. No RGB decode or SDK-owned buffer escapes here.
++  const bool is_native_yuyv =
++      (stream_index == COLOR || stream_index == COLOR_LEFT || stream_index == COLOR_RIGHT) &&
++      frame->getFormat() == OB_FORMAT_YUYV;
++  if (is_native_yuyv) {
++    sensor_msgs::msg::Image::UniquePtr native_msg(new sensor_msgs::msg::Image());
++    try {
++      // This pinned SDK exposes no stride getter. Accept exactly packed input;
++      // never infer padding by dividing an ambiguous SDK buffer size.
++      native_msg->data = native_yuyv::pack(video_frame->getData(), video_frame->getDataSize(),
++                                           video_frame->getWidth(), video_frame->getHeight());
++    } catch (const std::invalid_argument &) {
++      RCLCPP_ERROR_SKIPFIRST_THROTTLE(logger_, *(node_->get_clock()), 1000,
++                                     "Rejected malformed native YUYV frame");
++      record_image_publish_skipped();
++      return;
++    }
++    native_msg->header.stamp = timestamp;
++    native_msg->header.frame_id = frame_id;
++    native_msg->height = video_frame->getHeight();
++    native_msg->width = video_frame->getWidth();
++    native_msg->encoding = "yuyv";
++    native_msg->is_bigendian = false;
++    native_msg->step = native_msg->width * 2;
++    camera_info_publishers_.at(stream_index)->publish(camera_info);
++    publishMetadata(frame, stream_index, camera_info.header);
++    if (save_images_[stream_index]) {
++      cv::Mat native_image(height, width, CV_8UC2, native_msg->data.data());
++      saveImageToFile(stream_index, native_image, native_image, *native_msg, frame);
++    }
++    if (!has_raw_image_subscriber) {
++      record_image_publish_skipped();
++      return;
++    }
++    if (log_image_timestamps) {
++      timestamp_csv_logger_->recordImagePrePublish(stream_index.first, frame, getSystemNowUs(),
++                                                   getSteadyNowUs());
++    }
++    recordStreamStatus(stream_name_[stream_index] + "/image_raw", native_msg->header.stamp);
++    image_publishers_.at(stream_index)->publish(std::move(native_msg));
++    return;
++  }
+   auto &image = images_[stream_index];
+   if (frame->getType() == OB_FRAME_IR_RIGHT && enable_stream_[INFRA1]) {
+     auto stream_profile = frame->getStreamProfile();
+     CHECK_NOTNULL(stream_profile);
+     auto video_stream_profile = stream_profile->as<ob::VideoStreamProfile>();
+@@ -7682,11 +7755,14 @@
+     }
+     if (png_image.empty()) {
+       RCLCPP_ERROR_STREAM(logger_, "Failed to save PNG image: image is empty");
+     } else {
+       cv::Mat converted_png_image;
+-      if (image_msg.encoding == sensor_msgs::image_encodings::RGB8 && png_image.channels() == 3) {
++      if (image_msg.encoding == "yuyv" && png_image.channels() == 2) {
++        cv::cvtColor(png_image, converted_png_image, cv::COLOR_YUV2BGR_YUY2);
++        png_image = converted_png_image;
++      } else if (image_msg.encoding == sensor_msgs::image_encodings::RGB8 && png_image.channels() == 3) {
+         cv::cvtColor(png_image, converted_png_image, cv::COLOR_RGB2BGR);
+         png_image = converted_png_image;
+       } else if (image_msg.encoding == sensor_msgs::image_encodings::RGBA8 &&
+                  png_image.channels() == 4) {
+         cv::cvtColor(png_image, converted_png_image, cv::COLOR_RGBA2BGRA);
+diff --git a/orbbec_camera/include/orbbec_camera/native_yuyv.hpp b/orbbec_camera/include/orbbec_camera/native_yuyv.hpp
+new file mode 100644
+--- /dev/null
++++ b/orbbec_camera/include/orbbec_camera/native_yuyv.hpp
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: Apache-2.0
++// GeminiDepthPort: checked owned copies of native packed YUYV frames.
++#pragma once
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <limits>
++#include <stdexcept>
++#include <vector>
++
++namespace orbbec_camera {
++namespace native_yuyv {
++inline std::vector<uint8_t> pack(const void *source, std::size_t bytes,
++                                 std::size_t width, std::size_t height,
++                                 std::size_t trusted_stride = 0) {
++  const auto maximum = static_cast<std::size_t>(std::numeric_limits<uint32_t>::max());
++  if (!source || !width || !height || width % 2 || width > maximum / 2) {
++    throw std::invalid_argument("Invalid native YUYV dimensions or source");
++  }
++  const auto row = width * 2;
++  const auto stride = trusted_stride ? trusted_stride : row;
++  if (stride < row || height > maximum / stride || bytes != height * stride) {
++    throw std::invalid_argument("Native YUYV buffer layout does not match its declared span");
++  }
++  std::vector<uint8_t> result(height * row);
++  const auto *input = static_cast<const uint8_t *>(source);
++  for (std::size_t index = 0; index < height; ++index) {
++    std::memcpy(result.data() + index * row, input + index * stride, row);
++  }
++  return result;
++}
++}  // namespace native_yuyv
++}  // namespace orbbec_camera

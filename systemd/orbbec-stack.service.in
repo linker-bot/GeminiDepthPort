@@ -1,0 +1,21 @@
+[Unit]
+Description=Managed Orbbec camera group with Web console
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+PartOf=docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory="@DEPLOY_DIR@"
+ExecStart=/bin/bash "@DEPLOY_DIR@/deploy.sh" boot
+ExecStop=/bin/bash "@DEPLOY_DIR@/deploy.sh" stop
+TimeoutStartSec=2400
+TimeoutStopSec=240
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target docker.service

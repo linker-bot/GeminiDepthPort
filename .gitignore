@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+work/
+state/
+99-obsensor-libusb.rules
+.env
+.env.*
+!.env.example
+.DS_Store
+.pytest_cache/
+.coverage
+htmlcov/
