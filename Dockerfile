@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-tf2-ros ros-humble-tf2-msgs \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /ws
-RUN [[ "$ORBBEC_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+RUN test "$ORBBEC_COMMIT" = c153462518ad674650bafa4464fda72c27ab797a \
     && mkdir -p src/OrbbecSDK_ROS2 \
     && git -C src/OrbbecSDK_ROS2 init \
     && git -C src/OrbbecSDK_ROS2 remote add origin https://github.com/orbbec/OrbbecSDK_ROS2.git \
@@ -33,6 +33,11 @@ RUN [[ "$ORBBEC_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
     && git -C src/OrbbecSDK_ROS2 checkout --detach FETCH_HEAD \
     && test "$(git -C src/OrbbecSDK_ROS2 rev-parse HEAD)" = "$ORBBEC_COMMIT" \
     && git -C src/OrbbecSDK_ROS2 submodule update --init --recursive
+COPY scripts/capture-runtime/sdk_licenses.py /opt/gdp-license-tools/sdk_licenses.py
+COPY licenses/orbbec-sdk-v2.10.6 /opt/gdp-license-tools/sdk-license
+RUN python3 /opt/gdp-license-tools/sdk_licenses.py \
+      --source-root /ws/src/OrbbecSDK_ROS2 --license-root /opt/gdp-license-tools/sdk-license \
+      --output /opt/third-party/orbbec
 COPY patches/public-orbbec /opt/geminidepthport/patches/public-orbbec
 COPY scripts/apply_public_yuyv_patch.py /opt/geminidepthport/scripts/apply_public_yuyv_patch.py
 RUN test "$(sha256sum /opt/geminidepthport/patches/public-orbbec/0001-publish-owned-native-yuyv.patch | cut -d' ' -f1)" = "$YUYV_PATCH_SHA256" \

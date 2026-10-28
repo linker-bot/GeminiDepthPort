@@ -236,6 +236,16 @@ pub fn runtime(ctl: &Controller, d: &Value) -> Result<Value> {
             "Runtime binary hash does not match file inventory",
         )?;
     }
+    if let Some(recovery) = manifest.get("usb_recovery") {
+        require(
+            exact(recovery, &["helper", "sha256"])
+                && recovery["helper"] == "/opt/gdp-ros/bin/gdp-usb-recover"
+                && matches(r"^[a-f0-9]{64}$", text(&recovery["sha256"]))
+                && manifest["files"]["/opt/gdp-ros/bin/gdp-usb-recover"] == recovery["sha256"],
+            "RUST_RUNTIME_CONTRACT",
+            "USB recovery artifact is not bound to the runtime inventory",
+        )?;
+    }
     require(
         matches(r"^sha256:[a-f0-9]{64}$", text(&image["Id"])),
         "RUST_RUNTIME_CONTRACT",
@@ -257,6 +267,9 @@ pub fn service_config(d: &Value, c: &Value, generation: &str, runtime: &Value) -
     service["generation"] = generation.into();
     let m = &runtime["manifest"];
     let mut value = json!({"version":1,"sdk_library":SDK_PATH,"serial":c["serial_number"],"color":stream("color"),"depth":depth,"pairing":policy["pairing"],"poll_ms":policy["poll_ms"],"capacity":policy["capacity"],"startup_discovery_seconds":policy["startup_discovery_seconds"],"ros":{"bridge":BRIDGE_PATH,"namespace":c["namespace"],"stamp_source":"sdk-system-unix"},"service":service,"runtime_contract":{"sdk_sha256":m["sdk_sha256"],"bridge_sha256":m["bridge_sha256"],"service_sha256":m["service_sha256"]}});
+    if let Some(recovery) = m.get("usb_recovery") {
+        value["usb_recovery"] = recovery.clone();
+    }
     value["quality_policy"] = json!({
         "version":1,
         "max_source_age_ns":service["idle_timeout_ms"].as_u64().unwrap_or(0).saturating_mul(1_000_000),
@@ -298,8 +311,10 @@ mod quality_generation_tests {
             &d,
             &camera,
             &"a".repeat(32),
-            &json!({"manifest":{"sdk_sha256":"a".repeat(64),"bridge_sha256":"b".repeat(64),"service_sha256":"c".repeat(64)}}),
+            &json!({"manifest":{"sdk_sha256":"a".repeat(64),"bridge_sha256":"b".repeat(64),"service_sha256":"c".repeat(64),"usb_recovery":{"helper":"/opt/gdp-ros/bin/gdp-usb-recover","sha256":"d".repeat(64)}}}),
         );
+        assert_eq!(config["usb_recovery"]["sha256"], "d".repeat(64));
+        assert_eq!(config["service"]["max_restarts"], 2);
         assert_eq!(
             config["quality_policy"]["max_source_age_ns"],
             3_456_000_000_u64

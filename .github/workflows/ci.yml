@@ -79,6 +79,11 @@ jobs:
           upstream=$(python3 -c "import driver_build; print(driver_build.patch_identity()['upstream_commit'])")
           patch_digest=$(python3 -c "import driver_build; print(driver_build.patch_identity()['patch_sha256'])")
           docker build --build-arg "ORBBEC_COMMIT=$upstream" --build-arg "YUYV_PATCH_SHA256=$patch_digest" -t geminidepthport-native-yuyv:ci .
+      - name: Verify complete SDK license packaging without device access
+        run: >-
+          docker run --rm --network none --read-only --cap-drop ALL
+          --entrypoint python3 geminidepthport-native-yuyv:ci
+          /opt/gdp-license-tools/sdk_licenses.py --verify --output /opt/third-party/orbbec
       - name: Repeat synthetic ROS and preview checks without network or device access
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp --workdir /tmp \

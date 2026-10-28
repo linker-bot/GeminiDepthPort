@@ -1,9 +1,14 @@
 """No-device capture-image contract and executable compatibility smoke test."""
 import hashlib
 import json
+import os
+import signal
+import time
+import ctypes
 from pathlib import Path
 import subprocess
 import tempfile
+from sdk_licenses import verify
 
 
 def require(ok, message):
@@ -11,17 +16,60 @@ def require(ok, message):
         raise RuntimeError(message)
 
 
+def check_recovery_parent_death(helper):
+    # No USB: helper waits for serial input while its named parent exits.
+    # Retain a writer in this process so EOF cannot explain the helper's exit.
+    require(ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0, 'test subreaper setup failed')
+    incoming, writer = os.pipe()
+    notice, sender = os.pipe()
+    parent = os.fork()
+    if parent == 0:
+        os.close(notice)
+        child = subprocess.Popen([helper, '--parent-pid', str(os.getpid())], stdin=incoming,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.write(sender, str(child.pid).encode())
+        time.sleep(.25)
+        os._exit(0)
+    os.close(incoming)
+    os.close(sender)
+    helper_pid = int(os.read(notice, 32))
+    os.close(notice)
+    os.waitpid(parent, 0)
+    deadline = time.monotonic() + 5
+    waited = 0
+    try:
+        while True:
+            waited, status = os.waitpid(helper_pid, os.WNOHANG)
+            if waited:
+                require(os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL,
+                        'recovery helper did not die with its parent')
+                break
+            require(time.monotonic() < deadline, 'recovery helper survived parent')
+            time.sleep(.01)
+    finally:
+        os.close(writer)
+        if not waited:
+            os.kill(helper_pid, signal.SIGKILL)
+            os.waitpid(helper_pid, 0)
+
+
 def main():
     manifest = json.loads(Path('/opt/gdp-capture/runtime.json').read_text())
     require(manifest['version'] == 1 and manifest['sdk_version'] == '2.10.6'
             and manifest['upstream_commit'] == 'c153462518ad674650bafa4464fda72c27ab797a', 'runtime source/version differs')
     source = manifest['sdk_source']
+    license_inventory = verify('/opt/third-party/orbbec')
+    require(source.get('license_source') == license_inventory['sdk_license_source'], 'SDK license provenance differs')
     require(source['repository'] == 'https://github.com/orbbec/OrbbecSDK_ROS2'
             and source['commit'] == manifest['upstream_commit'] and source['license_files'], 'source/license inventory missing')
     for name, expected in manifest['files'].items():
         require(hashlib.sha256(Path(name).read_bytes()).hexdigest() == expected, 'runtime file hash differs')
     for name, expected in source['license_files'].items():
         require(hashlib.sha256(Path(name).read_bytes()).hexdigest() == expected, 'license hash differs')
+    required_license_paths = {'/opt/third-party/orbbec/' + name for name in license_inventory['files']}
+    required_license_paths.add('/opt/third-party/orbbec/license-inventory.json')
+    require(set(source['license_files']) == required_license_paths, 'license inventory omits packaged files')
+    require(required_license_paths.issubset(manifest['files']), 'runtime omits license files')
     sdk = '/opt/orbbec-sdk/lib/libOrbbecSDK.so'
     bridge = '/opt/gdp-ros/lib/libgeminidepthport_ros_bridge.so'
     service = '/usr/local/bin/capture-service'
@@ -41,13 +89,33 @@ def main():
                               'idle_timeout_ms': 2000, 'startup_timeout_ms': 15000, 'heartbeat_ms': 500,
                               'heartbeat_timeout_ms': 10000, 'max_restarts': 3, 'restart_backoff_ms': 1000,
                               'shutdown_timeout_ms': 5000, 'ready_min_pairs': 5}}
+        if 'usb_recovery' in manifest:
+            recovery = manifest['usb_recovery']
+            require(recovery['helper'] == '/opt/gdp-ros/bin/gdp-usb-recover'
+                    and manifest['files'][recovery['helper']] == recovery['sha256'], 'USB helper identity differs')
+            config['usb_recovery'] = dict(recovery)
+            refusal = subprocess.run([recovery['helper'], '--invalid'], capture_output=True, timeout=5)
+            require(refusal.returncode != 0 and json.loads(refusal.stdout)['code'] == 'USB_RECOVERY_ARGUMENTS', 'USB helper offline argument check failed')
+            refused_parent = subprocess.run([recovery['helper'], '--parent-pid', '2147483647'], capture_output=True, timeout=5)
+            require(refused_parent.returncode != 0 and json.loads(refused_parent.stdout)['code'] == 'USB_RECOVERY_PARENT', 'USB helper wrong-parent check failed')
+            for invalid_serial in (b'synthetic\x00ignored', b'A' * 129, b'synthetic\n'):
+                invalid = subprocess.run([recovery['helper'], '--parent-pid', str(os.getpid())], input=invalid_serial, capture_output=True, timeout=5)
+                require(invalid.returncode != 0 and json.loads(invalid.stdout)['code'] == 'USB_RECOVERY_INPUT', 'USB helper failed to reject invalid serial before access')
+            check_recovery_parent_death(recovery['helper'])
         path = Path(directory) / 'smoke.json'
         path.write_text(json.dumps(config))
         result = subprocess.run([service, '--validate-config', str(path)], text=True, capture_output=True, timeout=15)
         require(result.returncode == 0, 'capture executable/contract check failed: ' + result.stderr[:1000])
         report = json.loads(result.stdout)
+        require(report.get('usb_recovery_artifact_verified') is ('usb_recovery' in manifest), 'USB recovery validation differs')
         require(report.get('valid') is True and report.get('runtime_contract_verified') is True
                 and report.get('hardware_verified') is False, 'validation report differs')
+        if 'usb_recovery' in manifest:
+            config['usb_recovery']['sha256'] = '0' * 64
+            path.write_text(json.dumps(config))
+            refused = subprocess.run([service, '--validate-config', str(path)], capture_output=True, timeout=15)
+            require(refused.returncode != 0, 'tampered USB recovery artifact accepted')
+            config['usb_recovery'] = dict(manifest['usb_recovery'])
         config['runtime_contract']['sdk_sha256'] = '0' * 64
         path.write_text(json.dumps(config))
         rejected = subprocess.run([service, '--validate-config', str(path)], capture_output=True, timeout=15)

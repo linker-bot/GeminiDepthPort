@@ -1,5 +1,5 @@
-//! Minimal dynamically loaded Orbbec C ABI. Derived from the sibling SDK 2.9.3
-//! headers, not verified against the SDK bundled by the pinned ROS driver.
+//! Minimal dynamically loaded Orbbec C ABI, initially based on SDK 2.9.3 headers.
+//! Initial header checks do not prove ABI equivalence with the deployed SDK.
 //! No library is searched implicitly: callers must supply a trusted absolute path.
 use std::{
     ffi::{CStr, CString, c_char, c_int, c_void},

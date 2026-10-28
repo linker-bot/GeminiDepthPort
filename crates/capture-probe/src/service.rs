@@ -53,6 +53,7 @@ struct Settings {
     ready_min_pairs: u64,
 }
 struct ServiceConfig {
+    usb_recovery: Option<crate::usb_recovery::Recovery>,
     capture: Config,
     settings: Settings,
     hash: String,
@@ -77,6 +78,14 @@ impl ServiceConfig {
         ensure!(raw.len() <= 64 * 1024, "config too large");
         let mut value: Value =
             serde_json::from_value(capture_contract::parse_strict(raw.as_bytes())?)?;
+        let usb_recovery_value = value
+            .as_object_mut()
+            .context("config object required")?
+            .remove("usb_recovery");
+        let usb_recovery = usb_recovery_value
+            .as_ref()
+            .map(crate::usb_recovery::Recovery::parse)
+            .transpose()?;
         let raw_value = value
             .as_object_mut()
             .context("config object required")?
@@ -144,6 +153,16 @@ impl ServiceConfig {
         );
         value["seconds"] = json!(300);
         let mut capture = Config::parse(&value.to_string())?;
+        if usb_recovery.is_some() {
+            ensure!(
+                capture.serial.len() <= 128
+                    && capture.serial.bytes().all(|b| (33..=126).contains(&b)),
+                "USB recovery requires an ASCII device serial"
+            );
+        }
+        if let Some(policy) = usb_recovery_value {
+            capture.configuration["usb_recovery"] = policy;
+        }
         if let Some(policy) = &quality_runtime {
             policy.validate().map_err(anyhow::Error::msg)?;
             ensure!(
@@ -251,11 +270,15 @@ impl ServiceConfig {
             runtime_contract,
             quality_runtime,
             raw_settings,
+            usb_recovery,
         })
     }
 }
 impl ServiceConfig {
     fn verify_runtime(&self) -> Result<()> {
+        if let Some(recovery) = &self.usb_recovery {
+            recovery.verify()?;
+        }
         if let Some(contract) = &self.runtime_contract {
             for (key, path) in [
                 ("sdk_sha256", PathBuf::from(&self.capture.sdk_library)),
@@ -737,6 +760,7 @@ struct Status<'a> {
     last_failure: Option<&'static str>,
     quality: Option<ServiceQuality>,
     raw: Option<crate::raw_recording::RawRecorder>,
+    usb_recovery: Option<Value>,
 }
 impl Status<'_> {
     fn observe_raw_quality(&mut self) -> Result<()> {
@@ -780,7 +804,7 @@ impl Status<'_> {
         }
         atomic_status(
             &self.config.settings.status_path,
-            &json!({"version":1,"kind":"capture-service-status","state":state,"ready":state=="ready","reason":reason,"last_failure_reason":self.last_failure,"session_id":self.session,"instance_id":self.instance,"snapshot_id":self.snapshot.as_ref().map(|s|&s.0),"snapshot_path":self.snapshot.as_ref().map(|s|&s.1),"quality":self.quality.as_ref().map(ServiceQuality::references),"raw_recording":self.raw.as_ref().map(crate::raw_recording::RawRecorder::status),"generation":self.config.settings.generation,"config_sha256":self.config.hash,"pid":std::process::id(),"heartbeat_sequence":self.heartbeat,"updated_unix_ms":unix_ms(),"uptime_ms":self.started.elapsed().as_millis(),"restart_attempt":self.restarts,"last_pair_age_ms":last_pair.map(|v|v.elapsed().as_millis()),"pairs_accepted":metrics.accepted,"pairs_rejected":metrics.rejected,"pairs_published":metrics.published_pairs,"individual_publish_calls":metrics.publish_calls,"publish_failures":metrics.publish_failures,"stamp_failures":metrics.stamp_failures,"framesets_observed":metrics.framesets,"missing_pairs":metrics.missing,"skew_rejections":metrics.skew,"monotonic_rejections":metrics.monotonic,"poll_timeouts":metrics.timeouts,"physical_sync_verified":false,"delivery_verified":false}),
+            &json!({"version":1,"kind":"capture-service-status","state":state,"ready":state=="ready","reason":reason,"last_failure_reason":self.last_failure,"session_id":self.session,"instance_id":self.instance,"snapshot_id":self.snapshot.as_ref().map(|s|&s.0),"snapshot_path":self.snapshot.as_ref().map(|s|&s.1),"quality":self.quality.as_ref().map(ServiceQuality::references),"usb_recovery":self.usb_recovery,"raw_recording":self.raw.as_ref().map(crate::raw_recording::RawRecorder::status),"generation":self.config.settings.generation,"config_sha256":self.config.hash,"pid":std::process::id(),"heartbeat_sequence":self.heartbeat,"updated_unix_ms":unix_ms(),"uptime_ms":self.started.elapsed().as_millis(),"restart_attempt":self.restarts,"last_pair_age_ms":last_pair.map(|v|v.elapsed().as_millis()),"pairs_accepted":metrics.accepted,"pairs_rejected":metrics.rejected,"pairs_published":metrics.published_pairs,"individual_publish_calls":metrics.publish_calls,"publish_failures":metrics.publish_failures,"stamp_failures":metrics.stamp_failures,"framesets_observed":metrics.framesets,"missing_pairs":metrics.missing,"skew_rejections":metrics.skew,"monotonic_rejections":metrics.monotonic,"poll_timeouts":metrics.timeouts,"physical_sync_verified":false,"delivery_verified":false}),
         )
     }
 }
@@ -817,6 +841,7 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
         last_failure: None,
         quality: None,
         raw: None,
+        usb_recovery: None,
     };
     status.quality = config
         .quality_runtime
@@ -844,6 +869,28 @@ fn worker(config: &ServiceConfig, restart: u64) -> Result<()> {
             "supported SDK host required"
         );
         config.verify_runtime()?;
+        if let Some(recovery) = &config.usb_recovery {
+            ensure!(
+                !recording_blocks_restart(config.settings.recording_control_path.as_deref()),
+                "recording protection blocks USB recovery"
+            );
+            status.usb_recovery = Some(json!({"version":1,"state":"running"}));
+            status.write("starting", None, &metrics, last_pair)?;
+            match recovery.execute(&config.capture.serial) {
+                Ok(result) => status.usb_recovery = Some(result),
+                Err(error) => {
+                    status.last_failure = Some("USB_STREAM_RECOVERY_FAILED");
+                    status.usb_recovery = Some(json!({"version":1,"state":"failed"}));
+                    return Err(error);
+                }
+            }
+            status.write("starting", None, &metrics, last_pair)?;
+            ensure!(
+                !STOP.load(Ordering::Relaxed)
+                    && !recording_blocks_restart(config.settings.recording_control_path.as_deref()),
+                "capture stopped or protected after USB recovery"
+            );
+        }
         let sdk = match orbbec_safe::Sdk::load(&config.capture.sdk_library) {
             Ok(sdk) => sdk,
             Err(error) => {
@@ -1780,7 +1827,7 @@ pub fn main_entry() {
             config.verify_runtime()?;
             println!(
                 "{}",
-                json!({"version":1,"kind":"capture-service-config-validation","valid":true,"runtime_contract_verified":config.runtime_contract.is_some(),"hardware_verified":false})
+                json!({"version":1,"kind":"capture-service-config-validation","valid":true,"runtime_contract_verified":config.runtime_contract.is_some(),"usb_recovery_artifact_verified":config.usb_recovery.is_some(),"hardware_verified":false})
             );
             return Ok(());
         }
@@ -2230,6 +2277,18 @@ mod tests {
         assert!(ServiceConfig::parse(&value.to_string()).is_err());
     }
     #[test]
+    fn usb_recovery_configuration_is_preserved_and_rejects_invalid_identity() {
+        let mut value = config();
+        value["usb_recovery"] = json!({"helper":"/private/helper","sha256":"a".repeat(64)});
+        let parsed = ServiceConfig::parse(&value.to_string()).unwrap();
+        assert_eq!(
+            parsed.capture.configuration["usb_recovery"],
+            value["usb_recovery"]
+        );
+        value["serial"] = json!("bad\nidentity");
+        assert!(ServiceConfig::parse(&value.to_string()).is_err());
+    }
+    #[test]
     fn runtime_contract_requires_exact_hash_fields_and_actual_bytes() {
         let mut value = config();
         value["runtime_contract"] = json!({"sdk_sha256":"a".repeat(64),"bridge_sha256":"b".repeat(64),"service_sha256":"c".repeat(64)});
@@ -2290,6 +2349,7 @@ mod tests {
             last_failure: None,
             quality: None,
             raw: None,
+            usb_recovery: None,
         };
         status
             .write(

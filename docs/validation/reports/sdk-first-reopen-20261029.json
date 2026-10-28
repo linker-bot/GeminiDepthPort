@@ -1,0 +1,286 @@
+{
+  "version": 1,
+  "date": "2026-10-29",
+  "scope": "single-device-functional-not-scale-or-physical-certification",
+  "sdk_version": "2.10.6",
+  "sdk_library_unchanged_from_pr30": true,
+  "sdk_sha256": "ade25a2a2fd5a3a5d4a8142d62b03fddb0594e1ab04096cdc4cc03c02ed74d2d",
+  "usb_recovery_sha256": "6aee2de8681e703464319ecc1da40c891d9c8fa823d3bc200f99ab8a98dff88e",
+  "same_final_image_and_service_ab": true,
+  "cases": [
+    {
+      "ok": true,
+      "simulated": false,
+      "retry_budget": 1,
+      "actual_restart_delta": 1,
+      "failed_reopen_attempts": 0,
+      "worker_reopen_blocked": true,
+      "session_reopen_blocked": true,
+      "wrong_credential_refused": true,
+      "cleanup_ok": true,
+      "artifact_sha256": {
+        "gate_protocol": "19c5dae148c46d3148ce5dac1bf5a29ced577fe3125cd933239918635dc60f16",
+        "manager": "577dd7bb7f62c0d75274458ddc3cc9f26e798d40db8726091c4395b98698ce46",
+        "service": "33da91777d5fe37f21715fe5cb636dbc81363546b9828a5314a9f1dcda41f4d3"
+      },
+      "case": "305-first",
+      "model": "Gemini 305",
+      "usb_recovery_enabled": true,
+      "recovery": {
+        "action": "clear-video-bulk-in-endpoints",
+        "endpoints": 5,
+        "interfaces": 5,
+        "state": "complete",
+        "version": 1
+      },
+      "resumed_framesets_observed": 85,
+      "resumed_pairs_published": 10
+    },
+    {
+      "ok": true,
+      "simulated": false,
+      "retry_budget": 1,
+      "actual_restart_delta": 1,
+      "failed_reopen_attempts": 0,
+      "worker_reopen_blocked": true,
+      "session_reopen_blocked": true,
+      "wrong_credential_refused": true,
+      "cleanup_ok": true,
+      "artifact_sha256": {
+        "gate_protocol": "19c5dae148c46d3148ce5dac1bf5a29ced577fe3125cd933239918635dc60f16",
+        "manager": "577dd7bb7f62c0d75274458ddc3cc9f26e798d40db8726091c4395b98698ce46",
+        "service": "33da91777d5fe37f21715fe5cb636dbc81363546b9828a5314a9f1dcda41f4d3"
+      },
+      "case": "335l-first",
+      "model": "Gemini 335L",
+      "usb_recovery_enabled": true,
+      "recovery": {
+        "action": "clear-video-bulk-in-endpoints",
+        "endpoints": 4,
+        "interfaces": 4,
+        "state": "complete",
+        "version": 1
+      },
+      "resumed_framesets_observed": 97,
+      "resumed_pairs_published": 10
+    },
+    {
+      "ok": true,
+      "simulated": false,
+      "retry_budget": 1,
+      "actual_restart_delta": 1,
+      "failed_reopen_attempts": 0,
+      "worker_reopen_blocked": true,
+      "session_reopen_blocked": true,
+      "wrong_credential_refused": true,
+      "cleanup_ok": true,
+      "artifact_sha256": {
+        "gate_protocol": "19c5dae148c46d3148ce5dac1bf5a29ced577fe3125cd933239918635dc60f16",
+        "manager": "577dd7bb7f62c0d75274458ddc3cc9f26e798d40db8726091c4395b98698ce46",
+        "service": "33da91777d5fe37f21715fe5cb636dbc81363546b9828a5314a9f1dcda41f4d3"
+      },
+      "case": "g2a-first",
+      "model": "Gemini 2 A",
+      "usb_recovery_enabled": true,
+      "recovery": {
+        "action": "clear-video-bulk-in-endpoints",
+        "endpoints": 3,
+        "interfaces": 3,
+        "state": "complete",
+        "version": 1
+      },
+      "resumed_framesets_observed": 98,
+      "resumed_pairs_published": 10
+    },
+    {
+      "ok": true,
+      "simulated": false,
+      "retry_budget": 1,
+      "actual_restart_delta": 1,
+      "failed_reopen_attempts": 0,
+      "worker_reopen_blocked": true,
+      "session_reopen_blocked": true,
+      "wrong_credential_refused": true,
+      "cleanup_ok": true,
+      "artifact_sha256": {
+        "gate_protocol": "19c5dae148c46d3148ce5dac1bf5a29ced577fe3125cd933239918635dc60f16",
+        "manager": "577dd7bb7f62c0d75274458ddc3cc9f26e798d40db8726091c4395b98698ce46",
+        "service": "33da91777d5fe37f21715fe5cb636dbc81363546b9828a5314a9f1dcda41f4d3"
+      },
+      "case": "g2b-first",
+      "model": "Gemini 2 B",
+      "usb_recovery_enabled": true,
+      "recovery": {
+        "action": "clear-video-bulk-in-endpoints",
+        "endpoints": 3,
+        "interfaces": 3,
+        "state": "complete",
+        "version": 1
+      },
+      "resumed_framesets_observed": 99,
+      "resumed_pairs_published": 10
+    },
+    {
+      "ok": true,
+      "simulated": false,
+      "retry_budget": 1,
+      "actual_restart_delta": 1,
+      "failed_reopen_attempts": 0,
+      "worker_reopen_blocked": true,
+      "session_reopen_blocked": true,
+      "wrong_credential_refused": true,
+      "cleanup_ok": true,
+      "artifact_sha256": {
+        "gate_protocol": "19c5dae148c46d3148ce5dac1bf5a29ced577fe3125cd933239918635dc60f16",
+        "manager": "577dd7bb7f62c0d75274458ddc3cc9f26e798d40db8726091c4395b98698ce46",
+        "service": "33da91777d5fe37f21715fe5cb636dbc81363546b9828a5314a9f1dcda41f4d3"
+      },
+      "case": "305-repeat",
+      "model": "Gemini 305",
+      "usb_recovery_enabled": true,
+      "recovery": {
+        "action": "clear-video-bulk-in-endpoints",
+        "endpoints": 5,
+        "interfaces": 5,
+        "state": "complete",
+        "version": 1
+      },
+      "resumed_framesets_observed": 86,
+      "resumed_pairs_published": 10
+    },
+    {
+      "ok": true,
+      "simulated": false,
+      "retry_budget": 1,
+      "actual_restart_delta": 1,
+      "failed_reopen_attempts": 0,
+      "worker_reopen_blocked": true,
+      "session_reopen_blocked": true,
+      "wrong_credential_refused": true,
+      "cleanup_ok": true,
+      "artifact_sha256": {
+        "gate_protocol": "19c5dae148c46d3148ce5dac1bf5a29ced577fe3125cd933239918635dc60f16",
+        "manager": "577dd7bb7f62c0d75274458ddc3cc9f26e798d40db8726091c4395b98698ce46",
+        "service": "33da91777d5fe37f21715fe5cb636dbc81363546b9828a5314a9f1dcda41f4d3"
+      },
+      "case": "335l-repeat",
+      "model": "Gemini 335L",
+      "usb_recovery_enabled": true,
+      "recovery": {
+        "action": "clear-video-bulk-in-endpoints",
+        "endpoints": 4,
+        "interfaces": 4,
+        "state": "complete",
+        "version": 1
+      },
+      "resumed_framesets_observed": 97,
+      "resumed_pairs_published": 10
+    },
+    {
+      "ok": false,
+      "simulated": false,
+      "retry_budget": 1,
+      "actual_restart_delta": 1,
+      "failed_reopen_attempts": 1,
+      "worker_reopen_blocked": true,
+      "session_reopen_blocked": true,
+      "wrong_credential_refused": true,
+      "cleanup_ok": true,
+      "artifact_sha256": {
+        "gate_protocol": "19c5dae148c46d3148ce5dac1bf5a29ced577fe3125cd933239918635dc60f16",
+        "manager": "9509859fc5047231766148e8c6eba19bd717318f1688eb0420172be569c4a5de",
+        "service": "0af50e5259dc3afbc047172630d557141ce1d36a9ebdf74acf2d82c7ff65e8ed"
+      },
+      "case": "final-baseline",
+      "model": "Gemini 305",
+      "usb_recovery_enabled": false
+    },
+    {
+      "ok": true,
+      "simulated": false,
+      "retry_budget": 1,
+      "actual_restart_delta": 1,
+      "failed_reopen_attempts": 0,
+      "worker_reopen_blocked": true,
+      "session_reopen_blocked": true,
+      "wrong_credential_refused": true,
+      "cleanup_ok": true,
+      "artifact_sha256": {
+        "gate_protocol": "19c5dae148c46d3148ce5dac1bf5a29ced577fe3125cd933239918635dc60f16",
+        "manager": "9509859fc5047231766148e8c6eba19bd717318f1688eb0420172be569c4a5de",
+        "service": "0af50e5259dc3afbc047172630d557141ce1d36a9ebdf74acf2d82c7ff65e8ed"
+      },
+      "case": "final-fixed",
+      "model": "Gemini 305",
+      "usb_recovery_enabled": true,
+      "recovery": {
+        "action": "clear-video-bulk-in-endpoints",
+        "endpoints": 5,
+        "interfaces": 5,
+        "state": "complete",
+        "version": 1
+      },
+      "resumed_framesets_observed": 84,
+      "resumed_pairs_published": 10
+    },
+    {
+      "ok": true,
+      "simulated": false,
+      "retry_budget": 1,
+      "actual_restart_delta": 1,
+      "failed_reopen_attempts": 0,
+      "worker_reopen_blocked": true,
+      "session_reopen_blocked": true,
+      "wrong_credential_refused": true,
+      "cleanup_ok": true,
+      "artifact_sha256": {
+        "gate_protocol": "19c5dae148c46d3148ce5dac1bf5a29ced577fe3125cd933239918635dc60f16",
+        "manager": "9509859fc5047231766148e8c6eba19bd717318f1688eb0420172be569c4a5de",
+        "service": "8a6ab2cbb73f505e7f52091f5966fa0ad0d50cab6dd856feb9361f0f06e28918"
+      },
+      "case": "hardened-305",
+      "model": "Gemini 305",
+      "usb_recovery_enabled": true,
+      "recovery": {
+        "action": "clear-video-bulk-in-endpoints",
+        "endpoints": 5,
+        "interfaces": 5,
+        "state": "complete",
+        "version": 1
+      },
+      "resumed_framesets_observed": 83,
+      "resumed_pairs_published": 10
+    },
+    {
+      "ok": true,
+      "simulated": false,
+      "retry_budget": 1,
+      "actual_restart_delta": 1,
+      "failed_reopen_attempts": 0,
+      "worker_reopen_blocked": true,
+      "session_reopen_blocked": true,
+      "wrong_credential_refused": true,
+      "cleanup_ok": true,
+      "artifact_sha256": {
+        "gate_protocol": "19c5dae148c46d3148ce5dac1bf5a29ced577fe3125cd933239918635dc60f16",
+        "manager": "9509859fc5047231766148e8c6eba19bd717318f1688eb0420172be569c4a5de",
+        "service": "8a6ab2cbb73f505e7f52091f5966fa0ad0d50cab6dd856feb9361f0f06e28918"
+      },
+      "case": "verified-305",
+      "model": "Gemini 305",
+      "usb_recovery_enabled": true,
+      "recovery": {
+        "action": "clear-video-bulk-in-endpoints",
+        "endpoints": 5,
+        "interfaces": 5,
+        "state": "complete",
+        "version": 1
+      },
+      "resumed_framesets_observed": 85,
+      "resumed_pairs_published": 10
+    }
+  ],
+  "physical_accuracy_verified": false,
+  "hardware_sync_verified": false,
+  "scale_release_acceptance_executed": false
+}

@@ -12,3 +12,7 @@ state/
 .coverage
 htmlcov/
 target/
+
+# Obsolete root-level deployment outputs; active generations live in state/.
+/config/
+/render-lock.json

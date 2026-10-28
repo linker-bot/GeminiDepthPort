@@ -14,7 +14,7 @@ last. Unexpected worker exit and requested shutdown use the same cleanup path.
 
 Cleanup uses the existing shutdown timeout as a bounded wait budget. After an
 unsuccessful graceful shutdown, forced-kill exit observation also has a bounded
-wait using that same configured budget, replacing an unbounded final `wait`.
+wait using that same configured budget.
 Failure to establish group ownership or finish cleanup is terminal; the
 supervisor does not open another SDK worker over surviving owned descendants.
 This does not alter startup, frame/pair/quality thresholds or restart counts.
@@ -38,7 +38,7 @@ cargo test -p capture-probe --offline --lib \
 cargo test -p capture-probe --offline --test service_supervision
 ```
 
-These fixtures never access USB, a real SDK device or ROS. The correction proves
+These fixtures never access USB, a real SDK device or ROS. The fixtures verify
 process ownership/lifecycle behavior only. It does not establish that an actual
 Orbbec SDK creates helper processes, and is not a claimed fix for real-device
 zero-frameset behavior after abrupt termination.

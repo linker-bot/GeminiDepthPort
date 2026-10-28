@@ -29,3 +29,10 @@
 !ros/**
 !scripts/capture-runtime/
 !scripts/capture-runtime/**
+
+!licenses/
+!licenses/orbbec-sdk-v2.10.6/
+!licenses/orbbec-sdk-v2.10.6/**
+!native/
+!native/usb-recovery/
+!native/usb-recovery/**

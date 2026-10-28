@@ -1,10 +1,10 @@
 # Experimental C ABI subset
 
-The declarations were manually checked against the sibling checkout at
-`OrbbecSDK_ROS2/orbbec_camera/SDK/include/libobsensor/h`.
-That SDK directory contains Linux libraries named `libOrbbecSDK.so.2.9.3`.
-This is **not** evidence that those headers equal the SDK bundled by this
-project's pinned ROS driver. No SDK source or binary is copied into this crate.
+The declarations were initially checked against SDK 2.9.3 headers. The deployed
+capture image uses SDK 2.10.6 from the fixed public OrbbecSDK_ROS2 source recorded
+in `capture.Dockerfile`. The initial header checksums below are historical ABI
+provenance, not proof of compatibility with the deployed SDK. No SDK source or
+binary is copied into this crate.
 
 Header SHA-256 values observed during implementation:
 

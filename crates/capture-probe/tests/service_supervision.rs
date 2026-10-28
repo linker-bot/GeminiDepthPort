@@ -681,3 +681,71 @@ fn killed_worker_group_helpers_are_reaped_before_reopen_and_unrelated_groups_sur
     assert!(processes.unrelated.try_wait().unwrap().is_none());
     assert_eq!(fs::read(&f.config).unwrap(), original);
 }
+
+fn configure_usb_recovery(f: &Fixture, fail: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let helper = f.root.join("usb-recovery");
+    let script = if fail {
+        "#!/bin/sh\ncat >/dev/null\nprintf 'usb-recovery\n' >>\"$GEMINIDEPTHPORT_MOCK_EVENTS\"\nexit 1\n"
+    } else {
+        "#!/bin/sh\n[ \"$#\" = 2 ] || exit 2\ns=$(cat)\n[ \"$s\" = test-device ] || exit 3\nprintf 'usb-recovery\n' >>\"$GEMINIDEPTHPORT_MOCK_EVENTS\"\nprintf '{\"version\":1,\"complete\":true,\"interfaces\":2,\"endpoints\":2}'\n"
+    };
+    fs::write(&helper, script).unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+    let bytes = digest::digest(&digest::SHA256, &fs::read(&helper).unwrap());
+    let mut sha = String::new();
+    for b in bytes.as_ref() {
+        use std::fmt::Write;
+        write!(&mut sha, "{b:02x}").unwrap();
+    }
+    let mut value: Value = serde_json::from_slice(&fs::read(&f.config).unwrap()).unwrap();
+    value["usb_recovery"] = json!({"helper":helper,"sha256":sha});
+    value["service"]["max_restarts"] = json!(0);
+    fs::write(&f.config, value.to_string()).unwrap();
+}
+#[test]
+fn usb_recovery_is_private_verified_and_precedes_sdk_start() {
+    let f = fixture();
+    configure_usb_recovery(&f, false);
+    let mut supervisor = launch(&f);
+    let value = wait_status(&f, &mut supervisor, |v| v["ready"] == true);
+    assert_eq!(value["usb_recovery"]["state"], "complete");
+    let events = fs::read_to_string(&f.events).unwrap();
+    assert!(events.find("usb-recovery").unwrap() < events.find("start").unwrap());
+    stop(&mut supervisor);
+}
+#[test]
+fn usb_recovery_failure_cannot_open_sdk_or_claim_ready() {
+    let f = fixture();
+    configure_usb_recovery(&f, true);
+    let mut supervisor = launch(&f);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while supervisor.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_ne!(status(&f).unwrap()["ready"], true);
+    assert_eq!(
+        status(&f).unwrap()["last_failure_reason"],
+        "USB_STREAM_RECOVERY_FAILED"
+    );
+    assert_eq!(fs::read_to_string(&f.events).unwrap(), "usb-recovery\n");
+}
+#[test]
+fn persistent_recording_gate_blocks_usb_recovery_before_any_device_access() {
+    let f = fixture();
+    configure_usb_recovery(&f, false);
+    let path = f.root.join("control.json");
+    fs::write(&path, "malformed").unwrap();
+    let mut value: Value = serde_json::from_slice(&fs::read(&f.config).unwrap()).unwrap();
+    value["service"]["recording_control_path"] = json!(path);
+    fs::write(&f.config, value.to_string()).unwrap();
+    let mut supervisor = launch(&f);
+    wait_status(&f, &mut supervisor, |v| {
+        v["reason"] == "RECORDING_PROTECTED_RECOVERY_BLOCKED"
+    });
+    thread::sleep(Duration::from_millis(150));
+    assert!(!f.events.exists());
+    assert!(path.exists());
+    stop(&mut supervisor);
+}

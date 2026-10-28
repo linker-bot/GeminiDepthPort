@@ -19,4 +19,4 @@ relicensed by the GeminiDepthPort Apache-2.0 license.
 GeminiDepthPort applies a small, publicly documented modification to the pinned
 OrbbecSDK_ROS2 source for owned native YUYV ROS publication and preview saving.
 The patch, source hashes and modification description are retained under
-patches/public-orbbec/ and docs/native-yuyv.md. Original upstream notices remain.
+patches/public-orbbec/ and docs/development/native-yuyv.md. Original upstream notices remain.
