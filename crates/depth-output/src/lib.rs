@@ -305,6 +305,9 @@ impl Job {
     /// Private immutable provenance sidecars. Snapshot must be attached before
     /// frames; per-pair evidence can be attached immediately before its frame.
     /// Only strict JSON with unique keys is accepted, up to 4 MiB.
+    pub fn stage_path(&self) -> &Path {
+        &self.stage
+    }
     pub fn attach_json(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
         if self.failed {
             return Err(OutputError::Invalid("JOB_FAILED"));
@@ -314,16 +317,29 @@ impl Job {
                 .strip_prefix("recording-record-")
                 .and_then(|s| s.strip_suffix(".json"))
                 .is_some_and(|s| s.len() == 20 && s.bytes().all(|b| b.is_ascii_digit()));
+            let diagnostic_name = name
+                .strip_prefix("d2c-diagnostics-")
+                .and_then(|s| s.strip_suffix(".json"))
+                .is_some_and(|s| {
+                    s.len() == 20
+                        && s.bytes().all(|b| b.is_ascii_digit())
+                        && s.parse::<u64>().ok() == Some(self.next)
+                });
             let pair_name = name
                 .strip_prefix("pair-evidence-")
                 .and_then(|s| s.strip_suffix(".json"))
                 .is_some_and(|s| s.len() == 20 && s.bytes().all(|b| b.is_ascii_digit()));
-            if !(name == "snapshot.json"
+            if !(name == "build-info.json"
+                || diagnostic_name
+                || name == "snapshot.json"
                 || name == "recording-context.json"
                 || pair_name
                 || recording_name)
-                || (name == "snapshot.json" && self.next != 0)
-                || ((pair_name || recording_name || name == "recording-context.json")
+                || ((name == "snapshot.json" || name == "build-info.json") && self.next != 0)
+                || ((pair_name
+                    || recording_name
+                    || diagnostic_name
+                    || name == "recording-context.json")
                     && !self.stage.join("snapshot.json").is_file())
             {
                 return Err(OutputError::Invalid("SIDECAR_NAME_OR_ORDER"));
@@ -462,6 +478,14 @@ impl Job {
             self.stage.join("manifest.jsonl"),
         )?;
         let mut marker = new_file(&self.stage.join("COMPLETE"))?;
+        struct PreparedMarker(PathBuf);
+        impl Drop for PreparedMarker {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+            }
+        }
+        // A failed pre-publication commit must not leave a prepared success marker.
+        let _prepared_marker = PreparedMarker(self.stage.join("COMPLETE"));
         writeln!(
             marker,
             "{{\"version\":1,\"frames\":{},\"snapshot_id\":\"{}\"}}",
@@ -787,5 +811,22 @@ mod tests {
         job.append(&e).unwrap();
         assert!(job.attach_json("snapshot.json", b"{}").is_err());
         assert!(job.finish().is_err());
+    }
+    #[test]
+    fn racing_final_target_cleans_prepared_success_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let frame = encoded();
+        let mut job = Job::create(
+            temp.path(),
+            "race",
+            Mode::Directory,
+            frame.record.context.snapshot_id.clone(),
+        )
+        .unwrap();
+        job.append(&frame).unwrap();
+        fs::create_dir(temp.path().join("race")).unwrap();
+        assert!(job.finish().is_err());
+        assert!(!temp.path().join("race.partial/COMPLETE").exists());
+        assert_eq!(fs::read_dir(temp.path().join("race")).unwrap().count(), 0);
     }
 }

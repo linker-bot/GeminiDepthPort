@@ -116,3 +116,12 @@ The tool does not infer business recording validity or physical accuracy.
 
 Historical-query acceptance must match the selected session's exact snapshot ID
 and finalized summary. A later worker's ready status cannot satisfy that check.
+
+## Bounded batch reads and cursor windows
+
+`quality-batch --request PRIVATE_JSON` and `quality-window --request PRIVATE_JSON`
+add version-1 bounded queries over the same validated live feeds. HTTP GET
+`/api/quality/batch` and `/api/quality/window` take a URL-encoded `request` JSON
+parameter. Expected identity is explicit; gaps, unknown scopes and incomplete
+pages remain visible. Batch responses do not claim group-atomic sampling or
+business validity. See [schemas, limits and acceptance](../contracts/provider-capabilities-v1.md).

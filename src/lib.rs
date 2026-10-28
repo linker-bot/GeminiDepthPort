@@ -15,4 +15,5 @@ pub mod official_observer;
 
 pub mod managed_quality;
 
+pub mod quality_batch;
 pub mod quality_history;

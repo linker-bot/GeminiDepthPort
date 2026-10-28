@@ -1,4 +1,5 @@
 //! Offline directory source; no acquisition, ROS, SDK, recording gate, or clock.
+pub mod job_control;
 pub mod recording;
 use capture_contract::{
     FrameContext,
@@ -11,6 +12,15 @@ use std::{
     io::{self, Read},
     path::{Component, Path, PathBuf},
 };
+
+/// Executable identity and numerical algorithm declarations, not attestation.
+pub fn build_info() -> serde_json::Value {
+    let mut value =
+        capture_contract::capabilities::build_info("offline-depth", env!("CARGO_PKG_VERSION"));
+    value["algorithms"] =
+        serde_json::json!({"d2c":1,"depth_ray_table":d2c_core::RAY_ALGORITHM_VERSION});
+    value
+}
 
 #[derive(Debug)]
 pub enum OfflineError {
@@ -31,9 +41,15 @@ impl std::fmt::Display for OfflineError {
 impl std::error::Error for OfflineError {}
 impl OfflineError {
     /// Additive public diagnostic; the existing category code remains stable.
-    pub fn detail_code(&self) -> &'static str {
+    pub fn detail_code(&self) -> &str {
         match self {
             Self::Warp(d2c_core::WarpError::OutputOverflow) => "D2C_OUTPUT_OVERFLOW",
+            Self::Contract(error)
+                if ["CAPABILITY_UNSUPPORTED", "CAPABILITY_REQUEST_INVALID"]
+                    .contains(&error.code.as_str()) =>
+            {
+                error.code.as_str()
+            }
             _ => self.code(),
         }
     }
@@ -495,7 +511,7 @@ fn convert(
     operation: Operation,
     geometry: &mut Option<Geometry>,
     ordinal: u64,
-) -> Result<(depth_output::EncodedDepth, bool)> {
+) -> Result<(depth_output::EncodedDepth, bool, Option<serde_json::Value>)> {
     let e = &frame.evidence;
     require(
         sha256(&frame.evidence_json) == frame.evidence_sha256,
@@ -538,7 +554,10 @@ fn convert_material(
     operation: Operation,
     geometry: &mut Option<Geometry>,
     ordinal: u64,
-) -> Result<(depth_output::EncodedDepth, bool)> {
+) -> Result<(depth_output::EncodedDepth, bool, Option<serde_json::Value>)> {
+    job_control::checkpoint()?;
+    job_control::observe(sequence);
+    let mut diagnostics = None;
     let scale = representation_scale(representation);
     let (bytes, width, height, kind, normalized) = match operation {
         Operation::PreserveCounts => {
@@ -601,6 +620,9 @@ fn convert_material(
             )?;
             let output =
                 d2c_core::warp_depth_to_color(raw, &g.rays, &g.color, g.transform, &mut g.buffer)?;
+            diagnostics = Some(
+                serde_json::json!({"source_pixels":output.stats.source_pixels,"zero_depth":output.stats.zero_depth,"invalid_ray":output.stats.invalid_ray,"nonfinite":output.stats.nonfinite,"behind":output.stats.behind,"projection_failure":output.stats.projection_failure,"out_of_bounds":output.stats.out_of_bounds,"candidates":output.stats.candidates,"collisions":output.stats.collisions,"replaced":output.stats.replaced,"occluded":output.stats.occluded,"equal_z_ties":output.stats.equal_z_ties,"valid_output":output.stats.valid_output,"clamped_nonzero":output.stats.clamped_nonzero}),
+            );
             let mut bytes = vec![0; output.depth_mm.len() * 2];
             output.write_packed_le(&mut bytes)?;
             (
@@ -631,6 +653,7 @@ fn convert_material(
             record,
         )?,
         normalized,
+        diagnostics,
     ))
 }
 /// Validation includes all selected payloads and requested numerical conversion,
@@ -652,9 +675,12 @@ pub fn validate(source: &mut impl FrameSource, operation: Operation) -> Result<R
         normalized_frames: 0,
     };
     while let Some(frame) = source.next_frame()? {
-        let (_, normalized) = convert(frame, &snapshot, operation, &mut g, report.validated_pairs)?;
+        job_control::checkpoint()?;
+        let (_, normalized, stats) =
+            convert(frame, &snapshot, operation, &mut g, report.validated_pairs)?;
         report.validated_pairs += 1;
         report.normalized_frames += u64::from(normalized);
+        job_control::advance(&report, stats.as_ref())?;
     }
     require(report.validated_pairs > 0, "SOURCE_EMPTY")?;
     Ok(report)
@@ -677,15 +703,23 @@ pub fn run(
     };
     let mut job =
         depth_output::Job::create(parent, name, options.mode, snapshot.snapshot_id.clone())?;
+    job_control::track(job.stage_path());
+    job.attach_json("build-info.json", &serde_json::to_vec(&build_info())?)?;
     job.attach_json("snapshot.json", &snapshot.to_bytes()?)?;
-    let (tx, rx) = std::sync::mpsc::sync_channel::<(depth_output::EncodedDepth, Vec<u8>, u64)>(
-        options.queue_capacity,
-    );
+    let (tx, rx) = std::sync::mpsc::sync_channel::<(
+        depth_output::EncodedDepth,
+        Vec<u8>,
+        u64,
+        Option<serde_json::Value>,
+    )>(options.queue_capacity);
     let worker = std::thread::Builder::new()
         .name("offline-depth-output".into())
         .spawn(
             move || -> std::result::Result<depth_output::Job, depth_output::OutputError> {
-                while let Ok((frame, evidence, sequence)) = rx.recv() {
+                while let Ok((frame, evidence, sequence, stats)) = rx.recv() {
+                    if let Some(stats)=stats {job.attach_json(&format!("d2c-diagnostics-{:020}.json",frame.record().ordinal),
+                        &serde_json::to_vec(&serde_json::json!({"version":1,"algorithm_version":d2c_core::RAY_ALGORITHM_VERSION,
+                            "pair_sequence":sequence,"source_context":frame.record().context,"counters":stats}))?)?;}
                     job.attach_json(&format!("pair-evidence-{sequence:020}.json"), &evidence)?;
                     job.append(&frame)?;
                 }
@@ -702,9 +736,10 @@ pub fn run(
     };
     let produced = (|| -> Result<()> {
         while let Some(frame) = source.next_frame()? {
+            job_control::checkpoint()?;
             let evidence = frame.evidence_json.clone();
             let sequence = frame.evidence.pair_sequence;
-            let (encoded, normalized) = convert(
+            let (encoded, normalized, stats) = convert(
                 frame,
                 &snapshot,
                 options.operation,
@@ -713,7 +748,8 @@ pub fn run(
             )?;
             report.validated_pairs += 1;
             report.normalized_frames += u64::from(normalized);
-            tx.send((encoded, evidence, sequence))
+            job_control::advance(&report, stats.as_ref())?;
+            tx.send((encoded, evidence, sequence, stats))
                 .map_err(|_| OfflineError::Worker)?;
         }
         require(report.validated_pairs > 0, "SOURCE_EMPTY")
@@ -722,6 +758,7 @@ pub fn run(
     let consumed = worker.join().map_err(|_| OfflineError::Worker)?;
     produced?;
     let job = consumed?;
+    job_control::checkpoint()?;
     job.finish()?;
     report.written_frames = report.validated_pairs;
     report.complete = true;

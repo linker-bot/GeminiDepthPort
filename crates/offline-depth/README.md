@@ -150,3 +150,14 @@ D2C range failures retain `code: "WARP_FAILED"` and add
 `detail_code: "D2C_OUTPUT_OVERFLOW"`. A winning projected color-Z outside u16
 millimetres rejects the whole frame. The input, including 65535 boundary values,
 is not silently changed, clamped or filtered; no COMPLETE output is published.
+
+## Capabilities, build identity, diagnostics and cancellation
+
+`offline-depth --capabilities` discovers supported protocols without an input;
+`--capabilities --require '{"protocols":{"offline_input":2}}'` selects an exact
+supported version without fallback. `--version` reports executable build identity.
+Successful jobs retain `build-info.json` and per-frame D2C diagnostic sidecars.
+Optional `--progress /absolute/new-progress.jsonl` records bounded-rate progress;
+SIGINT/SIGTERM request cooperative cancellation before commit. Resume remains
+unsupported. See the [complete interface and acceptance checklist](../../docs/contracts/provider-capabilities-v1.md)
+for failure, privacy, signal and commit-uncertainty boundaries.

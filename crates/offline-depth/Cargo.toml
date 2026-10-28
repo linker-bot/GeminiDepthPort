@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
 [dependencies]
+libc = "0.2"
 capture-contract = { path = "../capture-contract" }
 capture-observer = { path = "../capture-observer" }
 quality-core = { path = "../quality-core" }

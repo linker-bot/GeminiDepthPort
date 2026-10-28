@@ -306,3 +306,5 @@ mod tests {
         assert!(p.validate().is_err());
     }
 }
+
+pub mod capabilities;

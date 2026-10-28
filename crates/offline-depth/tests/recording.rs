@@ -483,3 +483,38 @@ fn native_recording_persists_and_exports_independently_verified_ros_snapshot_lin
     assert!(late.attach_ros_snapshot(&ros).is_err());
     assert!(late.finish().is_err());
 }
+
+#[test]
+fn both_v2_provenances_export_d2c_diagnostics_without_upgrading_identity() {
+    for observed in [false, true] {
+        let input = tempfile::tempdir().unwrap();
+        fixture_v2(input.path(), observed, false);
+        let output = tempfile::tempdir().unwrap();
+        let result = cli(
+            input.path(),
+            &[
+                "--recording-v2",
+                "--d2c",
+                "--output",
+                output.path().to_str().unwrap(),
+                "--job",
+                "d2c",
+            ],
+        );
+        assert!(result.status.success(), "{result:?}");
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(report["version"], 2);
+        assert_eq!(report["d2c_diagnostics"]["valid_output"], 1);
+        let stats: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                output
+                    .path()
+                    .join("d2c/d2c-diagnostics-00000000000000000000.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stats["source_context"]["sequence"].is_null(), observed);
+        assert_eq!(stats["counters"]["source_pixels"], 2);
+    }
+}

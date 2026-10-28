@@ -41,11 +41,32 @@ fn run() -> Result<()> {
         || a.iter().any(|v| ["--help", "-h"].contains(&v.as_str()))
     {
         println!(
-            "geminidepthport [--root DIRECTORY] COMMAND\nCommands: serve, scan, validate [--file FILE] [--draft], migrate [--bindings FILE] [--apply --expected-plan HASH], render [--draft], preflight, build, up, boot, status, check, down, stack-stop [--remove], devices, image-ref, bind NAME SERIAL, set NAME KEY JSON, confirm-profile NAME, protect, release-protection, logs, calibration-export, capture-snapshot, recording-status, usbfs-status, quality-current NAME, quality-events NAME [--cursor JSON] [--limit N], quality-session-summary NAME [--generation ID --session ID], recording-context [--require-strong], http-health"
+            "geminidepthport [--root DIRECTORY] COMMAND\nCommands: capabilities, build-info, quality-batch, quality-window, serve, scan, validate [--file FILE] [--draft], migrate [--bindings FILE] [--apply --expected-plan HASH], render [--draft], preflight, build, up, boot, status, check, down, stack-stop [--remove], devices, image-ref, bind NAME SERIAL, set NAME KEY JSON, confirm-profile NAME, protect, release-protection, logs, calibration-export, capture-snapshot, recording-status, usbfs-status, quality-current NAME, quality-events NAME [--cursor JSON] [--limit N], quality-session-summary NAME [--generation ID --session ID], recording-context [--require-strong], http-health"
         );
         return Ok(());
     }
     validate_arguments(&a)?;
+    if ["capabilities", "build-info"].contains(&cmd) {
+        let value = if cmd == "capabilities" {
+            if let Some(raw) = option(&a, "--require") {
+                let request = capture_contract::parse_strict(raw.as_bytes())?;
+                capture_contract::capabilities::negotiate(
+                    "geminidepthport",
+                    env!("CARGO_PKG_VERSION"),
+                    &request,
+                )?
+            } else {
+                capture_contract::capabilities::describe(
+                    "geminidepthport",
+                    env!("CARGO_PKG_VERSION"),
+                )
+            }
+        } else {
+            capture_contract::capabilities::build_info("geminidepthport", env!("CARGO_PKG_VERSION"))
+        };
+        println!("{value}");
+        return Ok(());
+    }
     if cmd == "http-health" {
         let port: u16 = option(&a, "--port").unwrap_or("8765".into()).parse()?;
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -85,6 +106,8 @@ fn run() -> Result<()> {
         "recording-status",
         "capture-snapshot",
         "usbfs-status",
+        "quality-batch",
+        "quality-window",
         "quality-current",
         "quality-events",
         "quality-session-summary",
@@ -97,6 +120,22 @@ fn run() -> Result<()> {
     } else {
         Some(ctl.lock(!read_only.contains(&cmd))?)
     };
+    if ["quality-batch", "quality-window"].contains(&cmd) {
+        let path = option(&a, "--request").context("ARGUMENT: --request required")?;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)?
+            .take(65537)
+            .read_to_end(&mut bytes)?;
+        require(
+            bytes.len() <= 65536,
+            "QUALITY_REQUEST_SIZE",
+            "Request too large",
+        )?;
+        let request = capture_contract::parse_strict(&bytes)?;
+        let response = geminidepthport::quality_batch::execute(&ctl, cmd, &request)?;
+        println!("{response}");
+        return Ok(());
+    }
     if cmd == "scan" {
         require(
             cfg!(target_os = "linux"),
@@ -333,6 +372,9 @@ fn run() -> Result<()> {
 fn validate_arguments(a: &[String]) -> Result<()> {
     let cmd = a[0].as_str();
     let (values, flags, positional): (&[&str], &[&str], usize) = match cmd {
+        "capabilities" => (&["--require"], &[], 0),
+        "build-info" => (&[], &[], 0),
+        "quality-batch" | "quality-window" => (&["--request"], &[], 0),
         "quality-current" => (&[], &[], 1),
         "quality-session-summary" => {
             require(

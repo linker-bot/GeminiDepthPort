@@ -692,6 +692,48 @@ fn handle(mut req: Request, m: &Arc<Manager>, port: u16) {
         let json = |code, v: Value| Ok((code, serde_json::to_vec(&v)?, "application/json"));
         if req.method() == &Method::Get {
             match path {
+                "/api/capabilities" => json(
+                    200,
+                    if get("require").is_empty() {
+                        capture_contract::capabilities::describe(
+                            "geminidepthport",
+                            env!("CARGO_PKG_VERSION"),
+                        )
+                    } else {
+                        capture_contract::capabilities::negotiate(
+                            "geminidepthport",
+                            env!("CARGO_PKG_VERSION"),
+                            &capture_contract::parse_strict(get("require").as_bytes())?,
+                        )?
+                    },
+                ),
+                "/api/build-info" => json(
+                    200,
+                    capture_contract::capabilities::build_info(
+                        "geminidepthport",
+                        env!("CARGO_PKG_VERSION"),
+                    ),
+                ),
+                "/api/quality/batch" | "/api/quality/window" => {
+                    require(
+                        get("request").len() <= 65536,
+                        "QUALITY_REQUEST_SIZE",
+                        "Request too large",
+                    )?;
+                    let request = capture_contract::parse_strict(get("request").as_bytes())?;
+                    json(
+                        200,
+                        crate::quality_batch::execute(
+                            &m.ctl,
+                            if path.ends_with("batch") {
+                                "quality-batch"
+                            } else {
+                                "quality-window"
+                            },
+                            &request,
+                        )?,
+                    )
+                }
                 "/healthz" => json(200, json!({"status":"ok"})),
                 "/api/state" => json(200, state(m)?),
                 "/api/usbfs" => json(200, crate::usbfs::status(&m.ctl.load()?)),

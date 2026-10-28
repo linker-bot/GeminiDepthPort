@@ -1,12 +1,67 @@
 use offline_depth::*;
 use std::path::{Path, PathBuf};
 fn main() {
-    match execute() {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args
+        .first()
+        .is_some_and(|v| v == "--capabilities" || v == "--version")
+    {
+        let response: Result<serde_json::Value> = (|| {
+            let component = "offline-depth";
+            let version = env!("CARGO_PKG_VERSION");
+            if args == ["--version"] {
+                return Ok(build_info());
+            }
+            if args == ["--capabilities"] {
+                return Ok(capture_contract::capabilities::describe(component, version));
+            }
+            if args.len() == 3 && args[0] == "--capabilities" && args[1] == "--require" {
+                let request = capture_contract::parse_strict(args[2].as_bytes())?;
+                return Ok(capture_contract::capabilities::negotiate(
+                    component, version, &request,
+                )?);
+            }
+            Err(OfflineError::Invalid("CAPABILITY_ARGUMENT"))
+        })();
+        match response {
+            Ok(value) => println!("{value}"),
+            Err(error) => {
+                println!(
+                    "{}",
+                    serde_json::json!({"version":1,"complete":false,"code":error.code(),"detail_code":error.detail_code()})
+                );
+                std::process::exit(1)
+            }
+        }
+        return;
+    }
+    let progress = args
+        .iter()
+        .position(|v| v == "--progress")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from);
+    let mut control = match job_control::JobControl::new(progress.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            println!(
+                "{}",
+                serde_json::json!({"version":1,"complete":false,"code":e.code(),"detail_code":e.detail_code()})
+            );
+            std::process::exit(1)
+        }
+    };
+    control.install_cli_signals();
+    match control.execute(execute) {
         Ok(report) => {
             println!(
                 "{}",
-                serde_json::to_string(&report)
-                    .unwrap_or_else(|_| "{\"complete\":false,\"code\":\"REPORT_FAILED\"}".into())
+                serde_json::to_string(&{
+                    let mut value = serde_json::to_value(&report).unwrap();
+                    value["build"] = build_info();
+                    value["d2c_diagnostics"] = control.diagnostics();
+                    value
+                })
+                .unwrap_or_else(|_| "{\"complete\":false,\"code\":\"REPORT_FAILED\"}".into())
             );
         }
         Err(e) => {
@@ -71,6 +126,9 @@ fn execute() -> Result<RunReport> {
                     Some("both") => depth_output::Mode::Both,
                     _ => return Err(OfflineError::Invalid("MODE_ARGUMENT")),
                 }
+            }
+            "--progress" => {
+                args.next().ok_or(OfflineError::Invalid("ARGUMENT_VALUE"))?;
             }
             "--validate-only" => validate_only = true,
             "--d2c" => d2c = true,

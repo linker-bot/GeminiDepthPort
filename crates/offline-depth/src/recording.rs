@@ -532,6 +532,8 @@ pub fn process(
         .map(|(p, n, m)| depth_output::Job::create(p, n, m, snapshot.snapshot_id.clone()))
         .transpose()?;
     if let Some(job) = job.as_mut() {
+        job_control::track(job.stage_path());
+        job.attach_json("build-info.json", &serde_json::to_vec(&build_info())?)?;
         job.attach_json("snapshot.json", &snapshot.to_bytes()?)?;
     }
     if let Some(job) = job.as_mut() {
@@ -559,7 +561,8 @@ pub fn process(
             TaggedEvidence::SdkBoundPair { pair, .. } => &pair.depth.context,
             TaggedEvidence::ObservedAssociation { association, .. } => &association.depth.context,
         };
-        let (encoded, normalized) = convert_material(
+        job_control::checkpoint()?;
+        let (encoded, normalized, stats) = convert_material(
             &frame.depth,
             frame.record.depth.endian,
             context,
@@ -608,13 +611,20 @@ pub fn process(
                 &format!("pair-evidence-{:020}.json", frame.record.sequence),
                 &frame.evidence_json,
             )?;
+            if let Some(stats) = &stats {
+                job.attach_json(&format!("d2c-diagnostics-{:020}.json",report.validated_pairs),
+                &serde_json::to_vec(&serde_json::json!({"version":1,"algorithm_version":d2c_core::RAY_ALGORITHM_VERSION,
+                    "pair_sequence":frame.record.sequence,"source_context":context,"counters":stats}))?)?;
+            }
             job.append(&encoded)?;
         }
         report.validated_pairs += 1;
         report.normalized_frames += u64::from(normalized);
+        job_control::advance(&report, stats.as_ref())?;
     }
     require(report.validated_pairs > 0, "SOURCE_EMPTY")?;
     if let Some(job) = job {
+        job_control::checkpoint()?;
         job.finish()?;
         report.written_frames = report.validated_pairs;
     }

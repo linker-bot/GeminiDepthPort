@@ -425,6 +425,7 @@ dependencies = [
  "d2c-core",
  "depth-output",
  "frame-core",
+ "libc",
  "png",
  "quality-core",
  "ring",
